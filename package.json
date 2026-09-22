@@ -1,0 +1,66 @@
+{
+  "name": "@cr1ms0n/pi-subagent",
+  "version": "0.11.0",
+  "description": "Community fork of Luke Parke's pi-subagent with Jev model/tool routing and verified Pi child capabilities",
+  "type": "module",
+  "license": "MIT",
+  "author": "Luke Parke",
+  "contributors": [
+    "Luke Parke (upstream author)",
+    "cr1ms0n (fork maintainer)"
+  ],
+  "homepage": "https://www.npmjs.com/package/@cr1ms0n/pi-subagent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awoaCrim/pi-smart-subagents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/awoaCrim/pi-smart-subagents/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "subagent",
+    "agents",
+    "coding-agent",
+    "extension",
+    "community-fork"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "skills",
+    "docs",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/subagent.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
