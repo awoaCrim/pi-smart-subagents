@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.1 — 2026-09-26
+
+### Child JSONL stream boundary
+
+- Close Pi RPC input on the legacy omitted-`willRetry` `agent_end` fallback without
+  cutting off modern retries, continuation, queued steering, or structured-output repair.
+- Decode backend JSONL incrementally across UTF-8 and chunk boundaries, including final
+  unterminated lines, while leaving the Jev HTTP JSON reader unchanged.
+
 ## 0.11.0 - 2026-09-22
 
 ### Probability-ranked Jev failover

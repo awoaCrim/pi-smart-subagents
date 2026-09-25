@@ -6,7 +6,8 @@
   stdout — a superset of `--mode json`), cancellation, process trees, budgets, and a live
   stdin command channel used for mid-run steering. Extension UI dialogs from headless
   children are auto-cancelled so they can never hang a run; stdin is closed after
-  `agent_settled` so RPC children shut down cleanly. Budget breaches steer a wrap-up
+  `agent_settled` (or Pi's legacy `agent_end` with omitted `willRetry`) so RPC children
+  shut down cleanly. Budget breaches steer a wrap-up
   message and allow grace turns before SIGTERM (`wrappedUp` marks a clean conclusion).
   A stall watchdog flags protocol silence, probes liveness via `get_state`, and kills
   after a second window so retry can take over. Group kills verify process start-time
@@ -94,9 +95,10 @@ Invariants:
     wrong; a worktree containing only the untouched WIP patch counts as unchanged.
 17. Process-tree reaping after a clean exit can be disabled per task with `keep_background`
     (for legitimately backgrounded work such as dev servers); forced stops always reap.
-18. Protocol completion prefers Pi's `agent_settled` event. Legacy `agent_end` without
-    `willRetry` is accepted for older Pi builds; `agent_end` with `willRetry: true` is
-    treated as non-terminal.
+18. Protocol completion prefers Pi's `agent_settled` event. Legacy Pi `agent_end` without
+    `willRetry` is accepted as an explicit fallback for older RPC hosts; `agent_end` with
+    `willRetry: true` is treated as non-terminal, and modern `willRetry: false` waits for
+    `agent_settled`. Codex/Claude parser-generated `agent_end` markers are not this fallback.
 19. Depth and spawn-policy parsing fail closed on malformed values: env scrubbing cannot
     silently reset the depth counter to top-level, and a malformed `PI_SUBAGENT_SPAWNS`
     disables spawning rather than unrestricting it.

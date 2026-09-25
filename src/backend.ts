@@ -28,9 +28,16 @@ import type { TaskResult, TaskSpec, ToolActivity } from "./types.js";
 
 /** Normalized event-stream parser contract, implemented per backend. */
 export interface BackendParser {
-  /** Consume a stdout chunk, yielding zero or more normalized updates. */
+  /**
+   * Consume a stdout chunk, yielding zero or more normalized updates. Buffer
+   * inputs may split UTF-8 characters or LF delimiters; implementations must
+   * decode incrementally and never treat a chunk boundary as stream end.
+   */
   feed(data: Buffer | string): ProtocolUpdate[];
-  /** Flush any buffered partial line at stream end. */
+  /**
+   * End the incremental decoder and flush one final unterminated line. This is
+   * called at most once by the runner, and repeated calls must be harmless.
+   */
   flush(): ProtocolUpdate[];
   /** Build the terminal TaskResult from exit status. */
   finalize(exitCode: number | null, signal?: NodeJS.Signals, stderr?: string): TaskResult;
