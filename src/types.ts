@@ -12,6 +12,22 @@ export type TimeoutPhase = "queued" | "starting" | "running" | "cancelling";
 export type TaskProfile = "explore" | "review" | "general";
 export type OutputMode = "inline" | "file-only";
 
+/**
+ * Optional dispatch-author difficulty for Jev routing context. It is a
+ * descriptive selector signal only: the local code never maps a level to a
+ * fixed model, reorders candidates, changes profile permissions or alters
+ * retry/failover behavior.
+ */
+export type TaskDifficulty = "simple" | "moderate" | "complex";
+
+/** Accepted difficulty values, in the order the dispatch guidance lists them. */
+export const TASK_DIFFICULTIES: readonly TaskDifficulty[] = Object.freeze(["simple", "moderate", "complex"]);
+
+/** Runtime guard for the optional difficulty field (fail-closed on any other value). */
+export function isTaskDifficulty(value: unknown): value is TaskDifficulty {
+  return value === "simple" || value === "moderate" || value === "complex";
+}
+
 /** Durable identity of a spawned child process for orphan reconcile. */
 export interface ChildProcessIdentity {
   pid: number;
@@ -110,6 +126,8 @@ export interface TaskSpec {
   systemPrompt?: string;
   model?: string;
   thinking?: ThinkingLevel;
+  /** Optional difficulty hint forwarded to the selector as descriptive routing context. */
+  difficulty?: TaskDifficulty;
   tools?: string[];
   profile: TaskProfile;
   canWrite?: boolean;

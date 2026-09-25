@@ -10,6 +10,8 @@
  * filtering and mandatory Pi control-plane tools stay in `src/policy.ts` and the caller.
  */
 
+import type { TaskDifficulty } from "./types.js";
+
 /**
  * Fixed official TypeSafe endpoint. The first version has no custom base URL, proxy or
  * task-selected endpoint; the transport always uses this constant with `redirect:"error"`.
@@ -131,6 +133,11 @@ export interface RoutingConstraints {
   /** Opaque Pi thinking level requested by the task/agent/profile. */
   readonly requestedThinking?: string;
   readonly structuredOutput?: boolean;
+  /**
+   * Descriptive dispatch difficulty supplied by the calling agent. Selector context only;
+   * never a local model tier, candidate order or permission rule.
+   */
+  readonly difficulty?: TaskDifficulty;
 }
 
 /**

@@ -3,7 +3,8 @@ import type { AgentDefinition } from "./agents.js";
 import { resolveAgent } from "./agents.js";
 import { isPlausibleSchema, repairDoubleEncodedText } from "./structured.js";
 import { defaultConfig, type TaskDefaults, type TaskDefaultsByProfile } from "./config.js";
-import type { ModelAttemptSpec, OutputMode, TaskProfile, TaskSpec } from "./types.js";
+import type { ModelAttemptSpec, OutputMode, TaskDifficulty, TaskProfile, TaskSpec } from "./types.js";
+import { isTaskDifficulty, TASK_DIFFICULTIES } from "./types.js";
 import type { ParallelTaskInput, SubagentParams } from "./schema.js";
 import { BACKEND_NAMES, checkCapabilities, type BackendName } from "./backend.js";
 import { resolveBackend } from "./backends/index.js";
@@ -153,6 +154,7 @@ function normalizeTask(
     system_prompt?: string;
     model?: string;
     thinking?: TaskSpec["thinking"];
+    difficulty?: unknown;
     tools?: string[];
     profile?: TaskProfile;
     cwd?: string;
@@ -219,6 +221,13 @@ function normalizeTask(
   }
   if (item.output_schema !== undefined && !isPlausibleSchema(item.output_schema)) {
     return { error: `Task ${index + 1}: output_schema must be a JSON Schema object (type/properties/required)` };
+  }
+  let difficulty: TaskDifficulty | undefined;
+  if (item.difficulty !== undefined) {
+    if (!isTaskDifficulty(item.difficulty)) {
+      return { error: `Task ${index + 1}: difficulty must be one of ${TASK_DIFFICULTIES.join(", ")} (got ${JSON.stringify(item.difficulty)})` };
+    }
+    difficulty = item.difficulty;
   }
   if (item.include_wip === true) {
     const isolation = item.isolation ?? agent?.isolation ?? "shared";
@@ -292,6 +301,7 @@ function normalizeTask(
       requestedThinking,
       parentThinking: parent.thinking,
       thinking: requestedThinking,
+      difficulty,
       candidateTools: resolved.tools.filter((tool) => !CONTEXT_MANAGEMENT_TOOLS.has(tool)),
       mandatoryTools: resolved.tools.filter((tool) => CONTEXT_MANAGEMENT_TOOLS.has(tool)),
       profile,
@@ -491,7 +501,7 @@ export function validateSubagentRequest(
     const maxTasks = options.maxTasks ?? defaultConfig.maxTasksPerRun;
     if (!rawTasks.length || rawTasks.length > maxTasks) return { ok: false, error: `Expected 1..${maxTasks} tasks (configurable via maxTasksPerRun)` };
     // Top-level TaskFields apply only to single-task mode.
-    if (params.system_prompt !== undefined || params.model !== undefined || params.fallback_models !== undefined || params.tools !== undefined || params.profile !== undefined || params.cwd !== undefined || params.resume !== undefined || params.agent !== undefined) {
+    if (params.system_prompt !== undefined || params.model !== undefined || params.fallback_models !== undefined || params.tools !== undefined || params.profile !== undefined || params.cwd !== undefined || params.resume !== undefined || params.agent !== undefined || params.difficulty !== undefined) {
       return { ok: false, error: "Top-level task options cannot be combined with tasks[]; set them on each tasks[] item" };
     }
     // Context forking duplicates the whole parent conversation per child;
