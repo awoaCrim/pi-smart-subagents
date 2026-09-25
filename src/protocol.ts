@@ -1,3 +1,4 @@
+import { StringDecoder } from "node:string_decoder";
 import type { Message } from "@earendil-works/pi-ai";
 import type { TaskResult, ToolActivity, UsageStats } from "./types.js";
 import { emptyUsage } from "./types.js";
@@ -30,6 +31,8 @@ export type ProtocolUpdate =
 /** Strict-enough, line-buffered parser for Pi's documented JSON event stream. */
 export class ProtocolParser {
   private buffer = "";
+  private readonly decoder = new StringDecoder("utf8");
+  private decoderEnded = false;
   private sessionId?: string;
   private messages: Message[] = [];
   private usage = emptyUsage();
@@ -153,7 +156,8 @@ export class ProtocolParser {
   }
 
   feed(data: Buffer | string): ProtocolUpdate[] {
-    this.buffer += data.toString();
+    if (typeof data === "string") this.buffer += data;
+    else if (!this.decoderEnded) this.buffer += this.decoder.write(data);
     // If a single line grows past the hard limit without a newline, drop it as a parse error.
     if (Buffer.byteLength(this.buffer, "utf8") > ProtocolParser.MAX_BUFFER_BYTES) {
       this.noteMalformedEvidence();
@@ -167,7 +171,14 @@ export class ProtocolParser {
 
   /** Parse a final JSON object even when stdout omitted its trailing newline. */
   flush(): ProtocolUpdate[] {
-    if (!this.buffer.trim()) return [];
+    if (!this.decoderEnded) {
+      this.buffer += this.decoder.end();
+      this.decoderEnded = true;
+    }
+    if (!this.buffer.trim()) {
+      this.buffer = "";
+      return [];
+    }
     const line = this.buffer;
     this.buffer = "";
     return this.parseLine(line);
@@ -383,10 +394,13 @@ export class ProtocolParser {
         return [];
       }
       // Pi may retry after agent_end (willRetry: true). That is NOT terminal;
-      // only agent_settled marks a fully settled run.
-      const willRetry = event.willRetry === true;
-      this.pendingRetry = willRetry;
-      return [{ type: "agent-end", willRetry }];
+      // modern runs settle through agent_settled. Older hosts omitted willRetry;
+      // preserve that omission so the runner can apply the legacy terminal fallback.
+      const willRetry = event.willRetry === undefined ? undefined : event.willRetry;
+      this.pendingRetry = willRetry === true;
+      return willRetry === undefined
+        ? [{ type: "agent-end" }]
+        : [{ type: "agent-end", willRetry }];
     }
 
     // A new live agent turn invalidates any earlier settle watermark: the run

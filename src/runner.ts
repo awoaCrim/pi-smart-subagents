@@ -266,6 +266,11 @@ export class ChildRunner {
     let wrappedUp = false;
     // Structured-output repair state: one steer-based retry after failed validation.
     let schemaRepairAttempted = false;
+    // The child may emit both a legacy agent_end and a modern agent_settled marker.
+    // Close stdin at most once, and keep a repair round open until its replacement
+    // assistant message has arrived so a duplicate marker cannot close it early.
+    let terminalBoundaryClosed = false;
+    let schemaRepairAwaitingAssistant = false;
     // Stall watchdog state.
     let lastEventAt = Date.now();
     let stallTimer: NodeJS.Timeout | undefined;
@@ -531,6 +536,63 @@ export class ChildRunner {
       pendingBudgetStop = { reason, deadlineTurns: turns + grace };
     };
 
+    /**
+     * Apply the shared terminal gate for modern settle and the Pi legacy
+     * omitted-willRetry fallback. Returns true only when a repair prompt was
+     * sent, so the caller leaves the RPC child alive for the replacement turn.
+     */
+    const handleSettledBoundary = (): boolean => {
+      if (terminalBoundaryClosed || schemaRepairAwaitingAssistant) return false;
+      // A settle during the wrap-up window means the child finished its
+      // final answer in time.
+      if (pendingBudgetStop && !requestedStop) wrappedUp = true;
+      // Structured-output gate: validate before letting the child exit.
+      // Invalid → one steer-based repair round (a fresh prompt keeps the
+      // RPC child alive and produces a new terminal marker when it finishes).
+      // Ranked exception: a settled assistant provider error/abort must NOT
+      // receive an extra same-model repair prompt — that prompt would add
+      // unintended work ahead of the ranked failover decision. A ranked
+      // parser without this observation capability is also not proof of a
+      // clean settle (fail closed); the unranked path is untouched.
+      const settledAssistantStop = parser.getAssistantStopReason?.();
+      const providerTerminated = settledAssistantStop === "error" || settledAssistantStop === "aborted"
+        || (ranked && settledAssistantStop === undefined);
+      if (spec.outputSchema && !requestedStop && !pendingBudgetStop && !(ranked && providerTerminated)) {
+        const extracted = extractStructuredResult(ranked ? parser.getAssistantText?.() : parser.getLiveText());
+        const check =
+          extracted.value !== undefined
+            ? checkAgainstSchema(extracted.value, spec.outputSchema)
+            : {
+                ok: false,
+                errors: [
+                  extracted.raw
+                    ? "json:result block did not parse as JSON"
+                    : "no json:result block found in the final message",
+                ],
+              };
+        if (!check.ok && !schemaRepairAttempted) {
+          schemaRepairAttempted = true;
+          if (
+            this.sendCommand?.({
+              type: "prompt",
+              message: repairMessage(check.errors),
+            })
+          ) {
+            schemaRepairAwaitingAssistant = true;
+            lastEventAt = Date.now();
+            return true;
+          }
+        }
+      }
+      terminalBoundaryClosed = true;
+      try {
+        processHandle?.stdin?.end();
+      } catch {
+        /* already closed */
+      }
+      return false;
+    };
+
     const handleUpdates = (updates: ProtocolUpdate[]) => {
       if (updates.length) {
         lastEventAt = Date.now();
@@ -583,53 +645,25 @@ export class ChildRunner {
           fatalError = update.error;
           requestStop("fatal");
         }
+        if (update.type === "message") {
+          // A repair round is live until its replacement assistant message is
+          // complete. This prevents a duplicate terminal marker from closing
+          // stdin before the repaired turn has started.
+          if (schemaRepairAwaitingAssistant && update.message.role === "assistant")
+            schemaRepairAwaitingAssistant = false;
+        }
         // RPC children stay alive until stdin closes; end it once the run settles.
-        if (update.type === "agent-settled") {
-          // A settle during the wrap-up window means the child finished its
-          // final answer in time.
-          if (pendingBudgetStop && !requestedStop) wrappedUp = true;
-          // Structured-output gate: validate before letting the child exit.
-          // Invalid → one steer-based repair round (a fresh prompt keeps the
-          // RPC child alive and produces a new settle when it finishes).
-          // Ranked exception: a settled assistant provider error/abort must NOT
-          // receive an extra same-model repair prompt — that prompt would add
-          // unintended work ahead of the ranked failover decision. A ranked
-          // parser without this observation capability is also not proof of a
-          // clean settle (fail closed); the unranked path is untouched.
-          const settledAssistantStop = parser.getAssistantStopReason?.();
-          const providerTerminated = settledAssistantStop === "error" || settledAssistantStop === "aborted"
-            || (ranked && settledAssistantStop === undefined);
-          if (spec.outputSchema && !requestedStop && !pendingBudgetStop && !(ranked && providerTerminated)) {
-            const extracted = extractStructuredResult(ranked ? parser.getAssistantText?.() : parser.getLiveText());
-            const check =
-              extracted.value !== undefined
-                ? checkAgainstSchema(extracted.value, spec.outputSchema)
-                : {
-                    ok: false,
-                    errors: [
-                      extracted.raw
-                        ? "json:result block did not parse as JSON"
-                        : "no json:result block found in the final message",
-                    ],
-                  };
-            if (!check.ok && !schemaRepairAttempted) {
-              schemaRepairAttempted = true;
-              if (
-                this.sendCommand?.({
-                  type: "prompt",
-                  message: repairMessage(check.errors),
-                })
-              ) {
-                lastEventAt = Date.now();
-                continue; // repair round in flight: do not close stdin yet
-              }
-            }
-          }
-          try {
-            processHandle?.stdin?.end();
-          } catch {
-            /* already closed */
-          }
+        // Modern Pi uses agent_settled. Older/reduced hosts omit willRetry on a
+        // terminal agent_end and never emit agent_settled, so that marker is the
+        // explicit legacy fallback. Only the Pi JSONL backend owns this marker
+        // contract; Codex/Claude synthesize agent-end before their settled update.
+        // An explicit willRetry:false remains non-final until agent_settled because
+        // modern hosts can still do post-agent work.
+        if (
+          update.type === "agent-settled" ||
+          (backend.name === "pi" && update.type === "agent-end" && update.willRetry === undefined)
+        ) {
+          if (handleSettledBoundary()) continue;
         }
       }
     };

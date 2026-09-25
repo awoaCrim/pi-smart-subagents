@@ -30,6 +30,7 @@
  * - `--json-schema` provides native structured output.
  */
 
+import { StringDecoder } from "node:string_decoder";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -88,6 +89,8 @@ function mapTools(tools: readonly string[]): string[] {
 
 export class ClaudeParser implements BackendParser {
   private buffer = "";
+  private readonly decoder = new StringDecoder("utf8");
+  private decoderEnded = false;
   private sessionId?: string;
   private model?: string;
   private messages: Message[] = [];
@@ -104,7 +107,8 @@ export class ClaudeParser implements BackendParser {
   private apiErrorSeen = false;
 
   feed(data: Buffer | string): ProtocolUpdate[] {
-    this.buffer += typeof data === "string" ? data : data.toString("utf8");
+    if (typeof data === "string") this.buffer += data;
+    else if (!this.decoderEnded) this.buffer += this.decoder.write(data);
     const updates: ProtocolUpdate[] = [];
     let newline: number;
     while ((newline = this.buffer.indexOf("\n")) !== -1) {
@@ -116,6 +120,10 @@ export class ClaudeParser implements BackendParser {
   }
 
   flush(): ProtocolUpdate[] {
+    if (!this.decoderEnded) {
+      this.buffer += this.decoder.end();
+      this.decoderEnded = true;
+    }
     if (!this.buffer.trim()) {
       this.buffer = "";
       return [];
