@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.2 — 2026-09-26
+
+### Task difficulty in Jev dispatch
+
+- Accept an optional `difficulty: "simple" | "moderate" | "complex"` on single and `tasks[]` dispatch requests and forward it to Jev as descriptive routing context in `state.constraints.difficulty`.
+- Document the three classification levels in the injected dispatch guidance and the public reference, and show the supplied value in `action:"plan"` output.
+- Keep difficulty a selector signal only: no fixed model mapping, no candidate reordering, no profile/permission change, no retry/failover change and no extra selector request. Omitted values stay compatible, invalid values are rejected locally, and the field is not persisted in execution results.
+
 ## 0.11.1 — 2026-09-26
 
 ### Child JSONL stream boundary

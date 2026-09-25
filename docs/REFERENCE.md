@@ -92,7 +92,7 @@ An interrupted or timed-out wait does not cancel or consume a still-running task
 
 #### Inspect a paid plan
 
-A plan runs local preflights and Jev selection without spawning a child or creating a run entry. It can incur selector fees; a later dispatch selects again. It checks the same model/tool/budget/isolation resolution as a launch.
+A plan runs local preflights and Jev selection without spawning a child or creating a run entry. It can incur selector fees; a later dispatch selects again. It checks the same model/tool/budget/isolation resolution as a launch. Each resolved plan line reports the supplied `difficulty` (or `(unspecified)` when none was given).
 
 ```json
 {
@@ -102,6 +102,26 @@ A plan runs local preflights and Jev selection without spawning a child or creat
   ]
 }
 ```
+
+#### Task difficulty
+
+`difficulty` is an optional descriptive hint added to Jev's routing context. It never hardcodes a model, reorders your candidates, changes tool permissions, or alters retry/failover behavior.
+
+| Value      | Use for                                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `simple`   | Bounded, well-specified read-only review; documentation/format checks; local verification.                                       |
+| `moderate` | Multi-file analysis; ordinary bug fixes; focused research with known boundaries.                                                 |
+| `complex`  | Architecture/design; cross-layer implementation; difficult debugging with an unknown root cause; high-risk or broad changes.     |
+
+```json
+{
+  "task": "Review the auth diff for security issues.",
+  "profile": "review",
+  "difficulty": "simple"
+}
+```
+
+Choose the lowest honest level. `simple` lowers the chance that a simple task is routed to an unnecessarily large model, but it does not guarantee a specific model: candidate descriptions, profile, thinking and Jev's probability ranking still decide. Omit the field when you have no honest signal; older callers stay valid and no default difficulty is inferred. An invalid value is rejected locally before any selector request. `difficulty` is request context only; it is not stored in results, session entries or run snapshots.
 
 #### Structured output
 
@@ -311,7 +331,7 @@ Plan and background-start native usage attachments are limited to 1024 selector 
 
 The candidate list is intersected with the models the local Pi registry reports as available. A configured model Pi cannot resolve is not eligible, and an empty eligible pool fails before any request. Adding a model anywhere else in Pi does not authorize it, and legacy `modelPolicy` entries are never imported automatically. An unknown `jevRouting` field is an error, not a silent default.
 
-Jev receives only the current delegated task text, your model IDs and descriptions, candidate tool names and descriptions, and the permission/output requirements it needs to choose. It does not receive repository files, conversation history, full system prompts, persona text or tool parameter schemas. Task text and descriptions are user content and may contain sensitive material, so treat what you delegate as disclosure to TypeSafe.
+Jev receives only the current delegated task text, your model IDs and descriptions, candidate tool names and descriptions, the requested difficulty and the permission/output requirements it needs to choose. It does not receive repository files, conversation history, full system prompts, persona text or tool parameter schemas. Task text and descriptions are user content and may contain sensitive material, so treat what you delegate as disclosure to TypeSafe.
 
 Every new extension-managed dispatch routes through Jev: `task`/`tasks[]`, `action:"plan"`, `/btw`, resume, fork, locally permitted nested dispatch and the optional `synthesis` child. `action:"plan"` calls Jev and runs the same local preflights, returns the resolved model/tool plan and the selector usage, and creates no child or run entry. A later dispatch selects again; there is no cached decision to reuse. If optional synthesis selection fails, the worker plan and its usage stay valid and synthesis is reported as blocked with its diagnostic.
 

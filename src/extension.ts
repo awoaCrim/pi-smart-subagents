@@ -449,6 +449,7 @@ function formatPlanEntry(task: ResolvedTask, index: number, maxRetriesDefault: n
     rankedTotal: task.routing?.rankedModels?.length,
     maxAttempts: rankedMaxAttempts(task.maxRetries ?? maxRetriesDefault),
     thinking: task.thinking,
+    difficulty: task.difficulty,
     profile: task.profile,
     access: task.canWrite ? "RW" : "RO" as const,
     tools: task.effectiveTools,
@@ -475,7 +476,7 @@ function formatPlanText(mode: "single" | "parallel", plan: ReturnType<typeof for
     ].filter(Boolean).join(" ");
     return [
       `${entry.index + 1}. ${entry.label}${entry.agent ? ` [agent:${entry.agent}]` : ""} (${entry.profile}/${entry.access})`,
-      `   model=${entry.model ?? "(none)"} thinking=${entry.thinking ?? "(default)"} isolation=${entry.isolation}`,
+      `   model=${entry.model ?? "(none)"} thinking=${entry.thinking ?? "(default)"} difficulty=${entry.difficulty ?? "(unspecified)"} isolation=${entry.isolation}`,
       `   ranked_models=[${entry.rankedPreview ?? entry.model ?? "(none)"}]${entry.rankedTotal && entry.rankedTotal > 5 ? ` (total ${entry.rankedTotal})` : ""}`,
       `   attempt_budget=${entry.maxAttempts} (max_retries limits EXTRA extension-level attempts; pre-tool availability failure advances the ranking, never wraps)`,
       `   shared_tools=[${entry.tools.join(",")}]`,
@@ -510,6 +511,7 @@ function guidelines(catalog?: Map<string, AgentDefinition>): string[] {
     "Delegate independent, read-heavy exploration or clean-context review; keep tightly coupled work in the parent.",
     "Prefer agent:'<name>' when a named agent matches the task — its persona prompt is usually better than an improvised one. Compose fields manually only when no agent fits.",
     "Give every task a short description label (3-5 words) so runs are scannable in UIs and result indexes.",
+    "Set difficulty on every new task so Jev can weigh scope and reasoning demand: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Choose the lowest truthful level; difficulty is descriptive routing context, not a fixed model tier or permission change.",
     "Profiles: explore/review are strictly read-only (safe for fanout); general offers the full available locally permitted catalog to Jev and may write. Explicit tools are a ceiling; agent tool defaults do not narrow candidates. Single tasks default to general, parallel tasks to explore.",
     "Parallel writers need isolation:'worktree' (each gets an isolated checkout; changed work lands on a branch). After a worktree run finishes, use action:'diff' to inspect, then 'apply' to bring changes into the main checkout or 'discard' to drop them.",
     "Set budgets: at max_turns/max_cost the child is steered to wrap up and given grace turns for a final answer (grace_turns tunes this); results end as 'partial' with wrappedUp:true when the child concluded. timeout_ms includes Jev selection, setup, queue and retries; max_cost excludes unreported TypeSafe currency; timeout results report the phase.",

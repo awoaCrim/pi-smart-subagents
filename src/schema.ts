@@ -30,6 +30,7 @@ const ThinkingLevel = Type.String({
 
 const OutputMode = Type.Union([Type.Literal("inline"), Type.Literal("file-only")]);
 const Profile = Type.Union([Type.Literal("explore"), Type.Literal("review"), Type.Literal("general")]);
+const Difficulty = Type.Union([Type.Literal("simple"), Type.Literal("moderate"), Type.Literal("complex")]);
 const Isolation = Type.Union([Type.Literal("shared"), Type.Literal("worktree")]);
 const Backend = Type.Union([Type.Literal("pi"), Type.Literal("codex"), Type.Literal("claude")]);
 const Action = Type.Union([
@@ -53,6 +54,10 @@ export const TaskFields = {
   thinking: Type.Optional({ ...ThinkingLevel, description: "Opaque Pi thinking level for the child. Values such as max are passed through unchanged; Pi/model support decides validity. Defaults to agent thinking, profile taskDefaults.thinking, selected candidate thinking, then the parent's level." }),
   tools: Type.Optional(Type.Array(Type.String(), { description: "Optional candidate ceiling for Jev. Default candidates are all available locally permitted tools. Jev chooses individually; available Pi continuity controls are added locally even with tools:[]." })),
   profile: Type.Optional({ ...Profile, description: "Capability profile: explore/review cannot write project files but retain Pi context-management tools; general permits Jev to choose from the full locally available catalog and may write." }),
+  difficulty: Type.Optional({
+    ...Difficulty,
+    description: "Optional dispatch difficulty for Jev routing context: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Descriptive only; Jev still chooses the model and tools.",
+  }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the child process." })),
   timeout_ms: Type.Optional(Type.Number({ minimum: 1, maximum: 24 * 60 * 60_000, description: "Total budget in milliseconds including local preflight, Jev selection, setup, queue and retries. Timed-out runs report which phase timed out." })),
   max_turns: Type.Optional(Type.Number({ minimum: 1, maximum: 500, description: "Budget: at this many turns the child is steered to wrap up and given grace turns for a final answer; ends as 'partial' with output preserved." })),

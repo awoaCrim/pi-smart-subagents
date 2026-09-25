@@ -1,6 +1,6 @@
 {
   "name": "@cr1ms0n/pi-subagent",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Community fork of Luke Parke's pi-subagent with Jev model/tool routing and verified Pi child capabilities",
   "type": "module",
   "license": "MIT",

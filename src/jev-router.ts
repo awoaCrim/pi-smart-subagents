@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { Semaphore } from "./semaphore.js";
 import { isThinkingLevel } from "./thinking.js";
+import { isTaskDifficulty, TASK_DIFFICULTIES } from "./types.js";
 import { normalizeRoutingApiKey } from "./routing-policy.js";
 import { choiceIsMaximal, orderRankedModels } from "./model-failover.js";
 import {
@@ -194,6 +195,9 @@ type BodyRead =
 const MODEL_INSTRUCTIONS =
   "Select exactly one candidate execution model for the delegated task described in state. "
   + "Match the task text and constraints against each candidate's user-provided characteristics. "
+  + "When state.constraints includes a difficulty (simple, moderate or complex), treat it as "
+  + "descriptive context for the task's scope and reasoning demand: use it to judge fit, never "
+  + "as a directive to pick a fixed model tier or to override the candidate characteristics. "
   + "Criteria keys are correlation IDs only. Candidate order carries no ranking; choose on fit, "
   + "not on position, model name, cost or quality assumptions.";
 
@@ -449,6 +453,7 @@ function buildState(input: RoutingSelectInput): Record<string, unknown> {
       profile: constraints.profile,
       ...(constraints.requestedThinking === undefined ? {} : { requested_thinking: constraints.requestedThinking }),
       ...(constraints.structuredOutput === undefined ? {} : { structured_output: constraints.structuredOutput }),
+      ...(constraints.difficulty === undefined ? {} : { difficulty: constraints.difficulty }),
     };
   }
   // Tool selection is deliberately model-independent: no selected_model is ever
@@ -598,6 +603,9 @@ function validateInput(input: RoutingSelectInput | undefined): string | undefine
     }
     if (constraints.structuredOutput !== undefined && typeof constraints.structuredOutput !== "boolean") {
       return "Routing constraints structuredOutput must be a boolean.";
+    }
+    if (constraints.difficulty !== undefined && !isTaskDifficulty(constraints.difficulty)) {
+      return `Routing constraints difficulty must be one of ${TASK_DIFFICULTIES.join(", ")}.`;
     }
   }
   return undefined;

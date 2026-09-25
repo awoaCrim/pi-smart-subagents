@@ -35,6 +35,7 @@ export async function routePreparedTasks(
         profile: task.profile,
         requestedThinking: task.requestedThinking,
         structuredOutput: task.outputSchema !== undefined,
+        ...(task.difficulty === undefined ? {} : { difficulty: task.difficulty }),
       },
     }, { purpose: options.purpose, taskIndex: index, deadline: task.deadline, signal: options.signal });
     options.assertOwner();
