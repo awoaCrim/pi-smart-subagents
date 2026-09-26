@@ -33,11 +33,20 @@
 - `policy.ts` / `schema.ts`: discriminated request validation and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Pi context-management control-plane tools remain available to child allowlists without granting project-file write access.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
-  shapes and local resource limits; `routing-policy.ts` owns the strict `jevRouting`
-  parser, the candidate intersection with locally available models, and the injected
-  model-facing guidance; `jev-router.ts` owns the injectable TypeSafe transport,
-  response validation, deadlines and per-request receipts, including a validated full probability ranking and model-independent task tool decisions; `dispatch-routing.ts` resolves every worker before any launch and refuses a partially selected fanout. Local policy finalizes a frozen candidate attempt plan with per-model thinking and one shared tool set. The router has no engine imports and makes no parent UI calls.
-- `config.ts`: defaults ← `~/.pi/subagent.json` ← `PI_SUBAGENT_*` env overrides.
+  shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
+  owns the strict `jevRouting` parser, including normalized complete-URL validation, the
+  candidate intersection with locally available models, and the injected model-facing
+  guidance; `jev-router.ts` owns the injectable TypeSafe transport, uses the frozen
+  per-invocation URL with `redirect: "error"`, and owns response validation, deadlines and
+  per-request receipts, including a validated full probability ranking and model-independent
+  task tool decisions; `dispatch-routing.ts` resolves every worker before any launch and
+  refuses a partially selected fanout. Local policy finalizes a frozen candidate attempt
+  plan with per-model thinking and one shared tool set. The configured URL is a private
+  transport setting: it is not part of routing DTOs, prompts, receipts, persisted results
+  or child arguments. The router has no engine imports and makes no parent UI calls.
+- `config.ts`: defaults ← `~/.pi/subagent.json` ← `PI_SUBAGENT_*` env overrides. Each
+  dispatch receives a fresh frozen `jevRouting` snapshot, so a valid `baseUrl` edit affects
+  the next dispatch without mutating an existing router invocation.
 - `structured.ts`: structured-output contract (dependency-free JSON-Schema subset
   validation, fenced json:result extraction, contract/repair prompts) and
   conservative double-encoded-arg repair. The runner gates the child's settle on

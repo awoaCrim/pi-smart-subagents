@@ -13,10 +13,12 @@
 import type { TaskDifficulty } from "./types.js";
 
 /**
- * Fixed official TypeSafe endpoint. The first version has no custom base URL, proxy or
- * task-selected endpoint; the transport always uses this constant with `redirect:"error"`.
+ * Exact official TypeSafe endpoint used when `jevRouting.baseUrl` is omitted. A configured
+ * destination is a complete request URL; the router never appends or replaces path segments.
  */
 export const TYPESAFE_SYSTEMONE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+/** Bounded configured destination length, measured in JavaScript string characters. */
+export const MAX_ROUTING_BASE_URL_LENGTH = 2_048;
 
 /** Stable alias default. An exact supported version may be pinned through config. */
 export const DEFAULT_SELECTOR_MODEL = "jev-latest";
@@ -91,6 +93,8 @@ export interface JevRoutingModelEntry {
  */
 export interface JevRoutingConfig {
   readonly selectorModel: string;
+  /** Normalized complete HTTPS request URL; omitted config uses the official endpoint. */
+  readonly baseUrl: string;
   /** User-configured TypeSafe credential; transport Authorization header only. */
   readonly apiKey: string;
   readonly timeoutMs: number;

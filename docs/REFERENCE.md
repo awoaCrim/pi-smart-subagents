@@ -12,7 +12,7 @@ This file stores the credential in plaintext. Restrict access to your user accou
 
 When upgrading from published npm `0.9.0`, remove `apiKeyEnv` and add `apiKey` with the actual key locally. The old field is rejected even if both fields are present. There is no environment fallback, automatic migration or default key. Published `0.9.0` still requires its older `apiKeyEnv` setup, while `0.10.0` uses the config-file credential contract.
 
-Reload or restart Pi after changing extension code. Subsequent dispatches re-read the config file, so a later key edit does not require setting an environment variable. Provider credentials for execution models are configured independently using Pi's own authentication mechanisms. Rotate credentials exposed in source, logs or conversation.
+Reload or restart Pi after changing extension code. Subsequent dispatches re-read the config file, so a later key or routing-destination edit takes effect on the next decision without setting an environment variable or restarting the process. Provider credentials for execution models are configured independently using Pi's own authentication mechanisms. Rotate credentials exposed in source, logs or conversation.
 
 ---
 
@@ -310,6 +310,7 @@ New subagent dispatches are selected by Jev, TypeSafe's structured-decision API,
 {
   "jevRouting": {
     "selectorModel": "jev-latest",
+    "baseUrl": "https://api.typesafe.ai/v1/systemone",
     "apiKey": "<your-typesafe-api-key>",
     "timeoutMs": 15000,
     "models": [
@@ -322,8 +323,14 @@ New subagent dispatches are selected by Jev, TypeSafe's structured-decision API,
 }
 ```
 
+| `jevRouting` field | Default / requirement | Purpose |
+| --- | --- | --- |
+| `baseUrl` | Optional; exact official `https://api.typesafe.ai/v1/systemone` when omitted | Complete normalized HTTPS SystemOne request URL; no implicit path rewriting |
+| `apiKey` | Required; private config only | Header-only TypeSafe credential; never put it in URL or routing data |
+
 - `selectorModel` defaults to the stable alias `jev-latest`. Pin an exact version to control which selector version is requested. This does not guarantee deterministic choices; the extension records the version that actually answered.
-- `apiKey` is required and has no default. It must be a non-blank string; surrounding whitespace is trimmed and embedded whitespace/control characters are rejected. Store it only in the private config file. The transport uses it for the Authorization header and does not copy it into prompts, selector JSON bodies, argv, logs, receipts or results. `apiKeyEnv` is rejected with migration guidance; environment variables cannot supply or override the key.
+- `apiKey` is required and has no default. It must be a non-blank string; surrounding whitespace is trimmed and embedded whitespace/control characters are rejected. Store it only in the private config file. The transport uses it only for the Authorization header and does not copy it into prompts, selector JSON bodies, argv, logs, receipts or results. `apiKeyEnv` is rejected with migration guidance; environment variables cannot supply or override the key.
+- `baseUrl` is optional and is the complete SystemOne request URL. When omitted, the exact official default `https://api.typesafe.ai/v1/systemone` is used. The URL is canonicalized by the standard URL parser and never receives an implicit path suffix or replacement. It must be an absolute `https://` URL with a hostname, no username/password, query, fragment, whitespace or control characters, and no more than 2048 characters; invalid values reject new routing before HTTP. A custom destination receives the same minimal task/model/tool routing disclosure, so configure it only when that endpoint is trusted. The normalized URL remains in the private frozen config snapshot, not in routing DTOs, prompts, receipts, persisted results or child arguments.
 - `timeoutMs` defaults to 15000 and must be an integer between 100 and 600000. It bounds one logical task selection, including all its HTTP requests and queue waits. Parallel workers each have a selection allowance, still capped by their absolute task `timeout_ms` deadline. Deferred synthesis has a separate allowance.
 - `models` holds 1 to 255 entries, each with an exact `provider/model-id` and a non-blank description. Those descriptions are what Jev matches against your task, so write them the way you would explain the model to a colleague. `thinking` is optional.
 

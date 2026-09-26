@@ -140,8 +140,16 @@ explicit task, agent, and profile `taskDefaults.thinking` values override it.
 The extension re-reads `jevRouting` on each dispatch and injects non-secret
 routing guidance into the parent prompt. The user stores the TypeSafe credential
 in `jevRouting.apiKey` in the private `~/.pi/subagent.json`; do not read, display
-or copy the key into task text, prompts or output. Legacy `apiKeyEnv` is rejected
-with migration guidance; there is no environment fallback. If the config or key
+or copy the key into task text, prompts or output. Optional `jevRouting.baseUrl` is
+the complete SystemOne request URL: omission keeps the exact official
+`https://api.typesafe.ai/v1/systemone` default, with no implicit path rewriting.
+It is canonicalized and must be an absolute HTTPS URL with a hostname, at most
+2048 characters, no username/password, query, fragment, whitespace or control
+characters. A custom endpoint changes the trusted recipient of the minimal routing
+disclosure; the normalized URL stays in the private config snapshot and is not put
+in routing DTOs, prompts, receipts, results or child arguments. `redirect: "error"`
+and header-only Bearer authentication remain enforced. Legacy `apiKeyEnv` is rejected
+with migration guidance; there is no environment fallback. If the config, URL or key
 is missing or invalid, management remains available but new spawns, `/btw`, plan,
 resume, fork and synthesis are rejected. This config-file credential contract ships in
 npm 0.10.0; published npm 0.9.0 uses the old environment mechanism.
