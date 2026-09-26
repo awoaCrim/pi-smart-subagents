@@ -26,7 +26,9 @@ pi install npm:@cr1ms0n/pi-subagent
 
 > 用只读子代理查看这个项目的目录结构，并总结主要模块。
 
-Jev 会选择模型和工具。使用 `/subagents` 查看任务，使用 `/subagent-cost` 查看用量。
+Jev 会选择模型和工具。可选的 `jevRouting.baseUrl` 可以指向受信任的完整 `https://` SystemOne 请求 URL；省略时仍精确使用官方默认端点 `https://api.typesafe.ai/v1/systemone`。该值会经过严格校验，修改它也会修改接收最小路由披露数据的目标。完整约束见[配置参考](docs/REFERENCE.md#jev-routing)。
+
+使用 `/subagents` 查看任务，使用 `/subagent-cost` 查看用量。
 
 并行任务、后台执行、工作树和结构化结果见[使用参考](docs/REFERENCE.md#quick-usage)，键盘操作见 [TUI 指南](docs/UX.md)。
 
@@ -37,6 +39,6 @@ Jev 会选择模型和工具。使用 `/subagents` 查看任务，使用 `/subag
 
 [MIT](LICENSE)。Copyright (c) 2026 Luke Parke。社区分支由 cr1ms0n（awoaCrim）维护。重新分发时请保留原始版权声明和许可证。
 
-译自 [README.md](README.md)，英文文件 blob：`f55b496dc010bd4242e6f6ffc8c987425ee9d7f4`。中英文内容如有差异，以英文为准。
+译自 [README.md](README.md)，英文文件 blob：`281eb7da693634a61cfb04ee4bc72165fd2de609`。中英文内容如有差异，以英文为准。
 
 感谢 [Linux.do](https://linux.do/)。

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Semaphore } from "./semaphore.js";
 import { isThinkingLevel } from "./thinking.js";
 import { isTaskDifficulty, TASK_DIFFICULTIES } from "./types.js";
-import { normalizeRoutingApiKey } from "./routing-policy.js";
+import { normalizeRoutingApiKey, normalizeRoutingBaseUrl } from "./routing-policy.js";
 import { choiceIsMaximal, orderRankedModels } from "./model-failover.js";
 import {
   DEFAULT_ROUTING_CONCURRENCY,
@@ -14,7 +14,6 @@ import {
   MAX_ROUTING_TOOL_QUESTIONS,
   MAX_SELECTOR_VERSION_LENGTH,
   PROBABILITY_SUM_TOLERANCE,
-  TYPESAFE_SYSTEMONE_ENDPOINT,
   type JevRoutingConfig,
   type RoutingDecision,
   type RoutingFailureCode,
@@ -69,8 +68,9 @@ export type {
  *   attempt and fallback issues no further selector requests.
  * - A single logical deadline = min(config.timeoutMs, caller absolute deadline) spans every
  *   request and all limiter waiting. Concurrent HTTP requests are bounded to two by default.
- * - Only `https://api.typesafe.ai/v1/systemone` with `redirect:"error"`; the Bearer key comes
- *   from the private config snapshot and is never copied into request bodies, results or messages.
+ * - Only the normalized HTTPS `jevRouting.baseUrl` destination with `redirect:"error"`; the
+ *   Bearer key comes from the private config snapshot and is never copied into request bodies,
+ *   results or messages. Omission uses the official endpoint unchanged.
  * - Responses are untrusted data: shape, answer type, question set, allowed options, finite
  *   probabilities, probability sum tolerance, confidence, usage counts and selector version
  *   are validated. Valid low-confidence choices are accepted (no threshold, no substitution).
@@ -670,6 +670,15 @@ export class JevRouter {
       return this.fail("too_many_tools", `At most ${MAX_ROUTING_TOOL_QUESTIONS} eligible tools can be considered in one selection.`, call);
     }
 
+    const baseUrl = normalizeRoutingBaseUrl(this.config.baseUrl);
+    if (!baseUrl) {
+      return this.fail(
+        "invalid_input",
+        "The TypeSafe routing destination is missing or invalid: set jevRouting.baseUrl to a complete HTTPS URL without credentials, query parameters, fragments, whitespace or control characters, or omit it to use the official endpoint.",
+        call,
+      );
+    }
+
     const apiKey = normalizeRoutingApiKey(this.config.apiKey);
     if (!apiKey) {
       return this.fail(
@@ -714,7 +723,7 @@ export class JevRouter {
         );
       }
 
-      const modelIssue = await this.issue(ctx, modelRequest, {
+      const modelIssue = await this.issue(ctx, baseUrl, modelRequest, {
         purpose: options.purpose,
         ...(options.taskIndex === undefined ? {} : { taskIndex: options.taskIndex }),
         sequence: 0,
@@ -767,7 +776,7 @@ export class JevRouter {
         if ("error" in packed) return this.fail(packed.error.code, packed.error.message, call);
 
         const settled = await Promise.all(packed.batches.map(async (batch, index) => {
-          const outcome = await this.issue(ctx, batch.text, {
+          const outcome = await this.issue(ctx, baseUrl, batch.text, {
             purpose: options.purpose,
             ...(options.taskIndex === undefined ? {} : { taskIndex: options.taskIndex }),
             sequence: index + 1,
@@ -901,7 +910,7 @@ export class JevRouter {
     this.publishReceipt(receipt, call);
   }
 
-  private async issue(ctx: CallContext, text: string, meta: IssueMeta, call: CallState): Promise<BatchIssue> {
+  private async issue(ctx: CallContext, baseUrl: string, text: string, meta: IssueMeta, call: CallState): Promise<BatchIssue> {
     const signal = ctx.controller.signal;
     if (signal.aborted) {
       return { issued: false, failure: { code: this.abortCode(ctx), message: this.abortMessage(ctx) } };
@@ -950,7 +959,7 @@ export class JevRouter {
       try {
         // `abortable` protects the logical deadline even when an injected transport ignores
         // its AbortSignal and never settles on its own.
-        response = await abortable(Promise.resolve(this.fetchImpl!(TYPESAFE_SYSTEMONE_ENDPOINT, {
+        response = await abortable(Promise.resolve(this.fetchImpl!(baseUrl, {
           method: "POST",
           redirect: "error",
           headers: {

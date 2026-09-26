@@ -2,11 +2,13 @@ import { isThinkingLevel } from "./thinking.js";
 import {
   DEFAULT_ROUTING_TIMEOUT_MS,
   DEFAULT_SELECTOR_MODEL,
+  MAX_ROUTING_BASE_URL_LENGTH,
   MAX_ROUTING_MODEL_ID_LENGTH,
   MAX_ROUTING_MODELS,
   MAX_ROUTING_SELECTOR_MODEL_LENGTH,
   ROUTING_TIMEOUT_MAX_MS,
   ROUTING_TIMEOUT_MIN_MS,
+  TYPESAFE_SYSTEMONE_ENDPOINT,
   type JevRoutingConfig,
   type JevRoutingModelEntry,
   type RoutingModelCandidate,
@@ -89,6 +91,67 @@ function parseApiKey(value: unknown, source: string): string {
   return key;
 }
 
+type BaseUrlValidation = { url?: string; reason?: string };
+
+const UNSAFE_BASE_URL_CHARS = /[\s\u0000-\u001f\u007f-\u009f]/u;
+
+function validateRoutingBaseUrl(value: unknown): BaseUrlValidation {
+  if (typeof value !== "string") {
+    return { reason: "must be a string when provided; omit it to use the official endpoint or provide a complete https:// URL" };
+  }
+  if (!value) return { reason: "must be a non-blank complete HTTPS URL" };
+  if (value.length > MAX_ROUTING_BASE_URL_LENGTH) {
+    return { reason: `must not exceed ${MAX_ROUTING_BASE_URL_LENGTH} characters` };
+  }
+  if (UNSAFE_BASE_URL_CHARS.test(value)) {
+    return { reason: "must not contain whitespace or control characters" };
+  }
+  if (value.includes("?")) return { reason: "must not contain query parameters" };
+  if (value.includes("#")) return { reason: "must not contain a fragment" };
+  if (/^https:/iu.test(value) && !/^https:\/\//iu.test(value)) {
+    return { reason: "must use https:// as a complete absolute URL" };
+  }
+
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[\/?#]|$)/u.test(value)) {
+    return { reason: "must include a hostname" };
+  }
+  const schemeSeparator = value.indexOf("://");
+  if (schemeSeparator >= 0) {
+    const authority = value.slice(schemeSeparator + 3).split(/[\/?#]/u, 1)[0] ?? "";
+    if (authority.includes("@")) return { reason: "must not contain username or password credentials; keep jevRouting.apiKey in the header-only config field" };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { reason: "must be a valid absolute URL" };
+  }
+  if (parsed.protocol !== "https:") return { reason: "must use https://; HTTP and other schemes are not supported" };
+  if (!parsed.hostname) return { reason: "must include a hostname" };
+  if (parsed.username || parsed.password) return { reason: "must not contain username or password credentials; keep jevRouting.apiKey in the header-only config field" };
+  if (parsed.search) return { reason: "must not contain query parameters" };
+  if (parsed.hash) return { reason: "must not contain a fragment" };
+
+  const url = parsed.href;
+  if (url.length > MAX_ROUTING_BASE_URL_LENGTH) {
+    return { reason: `the normalized URL must not exceed ${MAX_ROUTING_BASE_URL_LENGTH} characters` };
+  }
+  return { url };
+}
+
+/** Normalize a configured complete HTTPS SystemOne request URL without echoing it. */
+export function normalizeRoutingBaseUrl(value: unknown): string | undefined {
+  return validateRoutingBaseUrl(value).url;
+}
+
+function parseBaseUrl(value: unknown, source: string): string {
+  if (value === undefined) return TYPESAFE_SYSTEMONE_ENDPOINT;
+  const validation = validateRoutingBaseUrl(value);
+  if (!validation.url) invalid(source, `baseUrl ${validation.reason ?? "is invalid"}`);
+  return validation.url;
+}
+
 function parseTimeoutMs(value: unknown, source: string): number {
   if (value === undefined) return DEFAULT_ROUTING_TIMEOUT_MS;
   if (typeof value !== "number" || !Number.isInteger(value) || value < ROUTING_TIMEOUT_MIN_MS || value > ROUTING_TIMEOUT_MAX_MS) {
@@ -152,10 +215,11 @@ export function parseJevRouting(raw: unknown, source = JEV_ROUTING_CONFIG_FILE):
   if (Object.prototype.hasOwnProperty.call(record, "apiKeyEnv")) {
     invalid(source, "apiKeyEnv is no longer supported; remove it and set jevRouting.apiKey to the credential in your private user config. No environment fallback or automatic migration is performed");
   }
-  rejectUnknownKeys(record, ["selectorModel", "apiKey", "timeoutMs", "models"], source, "jevRouting");
+  rejectUnknownKeys(record, ["selectorModel", "apiKey", "baseUrl", "timeoutMs", "models"], source, "jevRouting");
 
   const snapshot: JevRoutingConfig = {
     selectorModel: parseSelectorModel(record.selectorModel, source),
+    baseUrl: parseBaseUrl(record.baseUrl, source),
     apiKey: parseApiKey(record.apiKey, source),
     timeoutMs: parseTimeoutMs(record.timeoutMs, source),
     models: parseModels(record.models, source),
@@ -168,6 +232,7 @@ export function jevRoutingTemplate(): string {
   return JSON.stringify({
     jevRouting: {
       selectorModel: DEFAULT_SELECTOR_MODEL,
+      baseUrl: TYPESAFE_SYSTEMONE_ENDPOINT,
       apiKey: "<your-typesafe-api-key>",
       timeoutMs: DEFAULT_ROUTING_TIMEOUT_MS,
       models: [

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Configurable Jev routing destination
+
+- Add optional `jevRouting.baseUrl` for a complete SystemOne request URL while preserving the exact official endpoint when omitted.
+- Normalize and reject blank, malformed, non-HTTPS, overlong, whitespace/control-containing, credential-bearing, query-bearing or fragment-bearing URLs before any selector request; keep snapshots frozen and diagnostics non-secret.
+- Preserve POST/body/headers, header-only Bearer auth, `redirect: "error"`, deadlines, aborts, bounded response handling, receipts and response validation, without adding the URL to routing DTOs, prompts, results, receipts or child arguments.
+- Document the custom-destination trust boundary in the reference, security/architecture docs, bundled skill and bilingual READMEs; add provider-free offline coverage without changing the package version or publishing.
+
 ## 0.11.2 — 2026-09-26
 
 ### Task difficulty in Jev dispatch
