@@ -43,7 +43,12 @@ The standalone pi-subagent provides rich TUI support for monitoring, inspecting,
   `… +N lines` trailer pointing at the artifact/child session.
 - Expanded detail adds a bounded route summary for Jev-routed runs: original selection, ranked probabilities, shared selected tools (plus locally added control-plane tools), selector version, answer-level confidence, outcome and selection latency. The actual execution model stays separate from the original choice. Large lists show a preview and total count; old runs without new fields remain readable. Compact results and completion notifications show at most the last five attempt models and label a shortened chain with its total attempt count.
 - Durations freeze at `endedAt`; running durations tick at render time.
-- A deadline that expires before child launch is shown as `timeout (routing)`; child queue/start/run/cancel phases retain their own timeout labels. The run id remains discoverable even when routing or setup fails, so status/wait can collect the bounded evidence without starting a duplicate child.
+- Terminal diagnostics use one bounded projection everywhere: failures/lost runs use
+  `failed — <error>` / `lost — <reason>`, timeouts use `timeout (routing|queued|starting|running|cancelling)`,
+  cancellation uses `cancelled`, and successful/partial runs use the bounded first meaningful
+  output or stop explanation. Compact surfaces collapse that line safely; expanded detail wraps
+  the same source text. The run id remains discoverable even when routing or setup fails, so
+  status/wait can collect the bounded evidence without starting a duplicate child.
 - Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
 
 ### Footer status
@@ -76,6 +81,7 @@ text with run ids and a `wait { id }` pointer.
   failures bypass batching and flush immediately, carrying held successes.
 - A `wait` that already delivered the run suppresses the redundant
   notification (delivered-state is re-checked at flush time).
+- Every task line uses the same bounded outcome diagnostic as inline and overlay rendering; old payloads without the diagnostic field fall back to their preview.
 - Model/attempt annotations use the actual execution history, not the immutable original Jev choice. Fallback creates no extra completion notification or delivery path.
 
 ### `/subagents` overlay
@@ -83,8 +89,11 @@ text with run ids and a `wait { id }` pointer.
 - List: two lines per run — glyph/id/state/stats, then the task preview.
   Selection cursor `▶`, animated spinner for live runs.
 - Detail: run stats, summary, then per-task sections (glyph, label,
-  model/selector route/profile/thinking, timeout phase, usage, pointers,
-  transcript/final output/errors), scrollable with ↑↓/j/k and PageUp/PageDown.
+  model/selector route/profile/thinking, canonical timeout/error diagnostic,
+  usage, pointers, transcript/final output), scrollable with ↑↓/j/k and
+  PageUp/PageDown. The detail viewport is calculated from the current terminal
+  height and the overlay's 80% max-height, reserving space for pagination and
+  the help line rather than using a fixed page size.
 - Actions: `c` cancel, `s` steer (prompts for a message, injects it into the
   running child), `d` dismiss, `r` resume, `o` output pointers, `a` apply a
   finished run's changed worktree into the main checkout (confirm dialog),
@@ -113,8 +122,10 @@ Finished runs with changed worktrees support `diff` / `apply` / `discard`
 actions (tool) and `a` / `x` keys (overlay). `apply` lands the worktree's
 combined patch (committed + uncommitted + untracked vs base) onto the main
 checkout as **uncommitted working-tree changes** via `git apply --3way`; it
-never commits and never deletes the worktree. `discard` is the explicit
-cleanup step and always confirms first.
+never commits and never deletes the worktree. If parent-WIP subtraction is
+not clean, the apply result remains visible together with a bounded warning
+such as `[includes parent WIP]`. `discard` is the explicit cleanup step and
+always confirms first.
 
 ### Parallel fan-in
 `synthesis: "<instruction>"` on a parallel run asks for one read-only child
@@ -135,11 +146,15 @@ Earlier attempts retain bounded, attributed output previews and child-session po
 ## States
 - **Queued/Running**: spinner + live stats + activity tail from live text.
 - **Completed/Partial/Failed/Cancelled/Timeout/Lost**: state glyph, frozen
-  duration, usage summary, output pointers; failures show the error message.
-  Timeout details identify `routing` separately from child `queued`, `starting`,
-  `running` or `cancelling` phases.
+  duration, usage summary, output pointers, and the shared bounded outcome
+  diagnostic; failures show the error message. Timeout details identify
+  `routing` separately from child `queued`, `starting`, `running` or
+  `cancelling` phases.
 - **Delivered vs Undelivered**: footer/overlay track pending delivery.
-- **Notification**: one per terminal transition to avoid spam.
+- **Notification**: one per terminal transition to avoid spam. The footer
+  notification keeps `Subagent <short-id>` plus the concise canonical
+  diagnostic; deduplication uses the run/transition identity, not the display
+  text.
 
 ## Integration Notes
 - Extension wires via `ctx.ui.custom((tui, theme, kb, done) => createSubagentsOverlay(tui, theme, adapter, done), {overlay: true})`.

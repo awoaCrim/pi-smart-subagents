@@ -8,10 +8,12 @@ import {
   formatState,
   formatTokens,
   formatPath,
+  formatTaskDiagnostic,
   isActiveState,
   oneLine,
   SPINNERS,
   stateGlyph,
+  taskDiagnostic,
 } from "./format.js";
 import { tailSessionFile, type TailSessionStatus } from "./transcript.js";
 
@@ -42,6 +44,9 @@ export interface UIAction {
   type: "cancel" | "dismiss" | "resume" | "output" | "close" | "select" | "transcript" | "steer";
   id?: string;
 }
+
+/** Shared with the overlayOptions maxHeight configuration in extension.ts. */
+export const SUBAGENTS_OVERLAY_MAX_HEIGHT_PERCENT = 80;
 
 /**
  * Terse footer segment. Pi's native footer already reports session cost, so
@@ -80,8 +85,8 @@ export class FooterStatusModel {
     this.adapter.notify?.(message, level);
     this.onUpdate?.();
   }
-  notifyTransition(message: string, level: "info" | "warn" = "info"): void {
-    this.notifyTerminal(message, message, level);
+  notifyTransition(id: string, message: string, level: "info" | "warn" = "info"): void {
+    this.notifyTerminal(id, message, level);
   }
   dispose(): void { this.onUpdate = undefined; this.notified.clear(); }
 }
@@ -353,7 +358,24 @@ export class SubagentsOverlay implements Component {
     return lines;
   }
 
-  private detailLines(width: number): string[] {
+  private maxOverlayRows(): number {
+    const rows = this.tui.terminal?.rows;
+    // Real Pi TUI instances expose terminal.rows. Keep a bounded fallback for
+    // reduced/headless hosts that only provide the Component surface.
+    return Number.isFinite(rows) && rows > 0
+      ? Math.max(1, Math.floor(rows * SUBAGENTS_OVERLAY_MAX_HEIGHT_PERCENT / 100))
+      : 24;
+  }
+
+  private detailPageSize(headerRows: number): number {
+    // Reserve pagination, the blank separator, and the help line even when
+    // pagination is not currently needed; otherwise the marker can overflow
+    // the configured overlay height on the next render.
+    const reservedRows = 3;
+    return Math.max(1, this.maxOverlayRows() - headerRows - reservedRows);
+  }
+
+  private detailLines(width: number, headerRows: number): string[] {
     const theme = this.theme;
     const run = this.detailId ? this.adapter.getRunById(this.detailId) : null;
     if (!run) return [theme.fg("error", " Run no longer exists"), "", theme.fg("dim", " esc back")];
@@ -396,7 +418,11 @@ export class SubagentsOverlay implements Component {
           result.thinking ? `thinking:${result.thinking}` : "",
         ].filter(Boolean).join(" · ");
         body.push(truncateToWidth(`${rGlyph} ${label} ${theme.fg("dim", caps)}`, width));
-        if (result.timeoutPhase) body.push(theme.fg("warning", `  timeout phase: ${result.timeoutPhase}`));
+        const diagnostic = taskDiagnostic(result);
+        const diagnosticText = formatTaskDiagnostic(result);
+        if (diagnostic && diagnosticText && diagnostic.kind !== "summary") {
+          for (const line of wrapLines(diagnosticText, width - 2)) body.push(`  ${theme.fg(diagnostic.tone, line)}`);
+        }
         const usage = result.usage;
         const stats = [
           usage?.turns ? `↻${usage.turns}` : "",
@@ -410,19 +436,16 @@ export class SubagentsOverlay implements Component {
           result.worktree ? `⎇ ${result.worktree.branch}` : "",
         ].filter(Boolean);
         if (pointers.length) body.push(truncateToWidth(theme.fg("dim", `  ${pointers.join(" · ")}`), width));
-        if (result.errorMessage) {
-          for (const line of wrapLines(result.errorMessage, width - 2)) body.push(`  ${theme.fg("error", line)}`);
-        }
         const text = result.transcript || result.finalOutput;
         if (text) {
           for (const line of wrapLines(text, width - 2)) body.push(`  ${theme.fg("toolOutput", line)}`);
-        } else if (!result.errorMessage) {
+        } else if (!diagnostic || diagnostic.kind === "summary") {
           body.push(theme.fg("dim", "  (no output)"));
         }
       });
     }
 
-    const pageSize = 24;
+    const pageSize = this.detailPageSize(headerRows);
     const maxScroll = Math.max(0, body.length - pageSize);
     if (this.liveTranscript && this.transcriptFollow) {
       this.scroll = maxScroll;
@@ -449,8 +472,9 @@ export class SubagentsOverlay implements Component {
   render(width: number): string[] {
     this.syncAnimation();
     this.syncTranscriptPoll();
-    const lines = this.header(width);
-    lines.push(...(this.detailId ? this.detailLines(width) : this.listLines(width)));
+    const header = this.header(width);
+    const lines = [...header];
+    lines.push(...(this.detailId ? this.detailLines(width, header.length) : this.listLines(width)));
     return lines.map((line) => truncateToWidth(line, width));
   }
 

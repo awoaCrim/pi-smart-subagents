@@ -7,8 +7,10 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
 import { defaultConfig, loadConfig, readConfigFile, type SubagentConfig } from "./config.js";
 import {
+  compactTaskDiagnostic,
   formatDuration,
   formatRankedPreview,
+  formatRunDiagnostic,
   formatStatusPreview,
   formatTokens,
   isActiveState,
@@ -46,7 +48,12 @@ import { addUsage, buildUsageLedger, formatLedger, hasBilledUsage, routingUsage,
 import { resolveSessionFilePath } from "./transcript.js";
 import { CompletionBatcher, COMPLETION_MESSAGE_TYPE, type CompletionDetails, type CompletionDetailsRun, type CompletionDetailsTask } from "./notifications.js";
 import { describeCatalog, discoverAgents, type AgentDefinition } from "./agents.js";
-import { createSubagentsOverlay, FooterStatusModel, type SubagentAdapter } from "./ui.js";
+import {
+  createSubagentsOverlay,
+  FooterStatusModel,
+  SUBAGENTS_OVERLAY_MAX_HEIGHT_PERCENT,
+  type SubagentAdapter,
+} from "./ui.js";
 import { WorktreeManager } from "./worktree.js";
 import { eligibleModelCandidates, formatJevRoutingPrompt, toToolCandidates } from "./routing-policy.js";
 import { JevRouter } from "./jev-router.js";
@@ -178,7 +185,14 @@ function makeAdapter(runtime: SessionRuntime): SubagentAdapter {
       if (!ok) return;
       try {
         const applied = await runtime.worktrees.apply({ cwd: tree.cwd, baseCommit: tree.baseCommit }, runtime.ctx.cwd);
-        runtime.ctx.ui.notify(applied.applied ? `Applied: ${applied.stat.split("\n").pop() ?? "changes staged in working tree"}` : "No changes to apply", "info");
+        const warning = applied.warning ? ` Warning: ${oneLine(applied.warning, 400)}` : "";
+        const level = applied.warning ? "warning" : "info";
+        runtime.ctx.ui.notify(
+          applied.applied
+            ? `Applied: ${applied.stat.split("\n").pop() ?? "changes staged in working tree"}${warning}`
+            : `No changes to apply${warning}`,
+          level,
+        );
       } catch (error: any) {
         runtime.ctx.ui.notify(`Apply failed: ${error?.message ?? error}`, "error");
       }
@@ -610,6 +624,7 @@ function buildCompletionDetails(runtime: SessionRuntime, runIds: string[]): Comp
         (result.finalOutput ?? result.errorMessage ?? "").split("\n").find((line) => line.trim()) ?? "",
         100,
       );
+      const diagnostic = compactTaskDiagnostic(result, 120);
       turns += result.usage?.turns ?? 0;
       tokens += (result.usage?.input ?? 0) + (result.usage?.output ?? 0);
       cost += result.usage?.cost ?? 0;
@@ -617,6 +632,7 @@ function buildCompletionDetails(runtime: SessionRuntime, runIds: string[]): Comp
         label: result.label ?? snapshot.taskPreviews[index] ?? `task-${index + 1}`,
         state: result.state,
         timeoutPhase: result.timeoutPhase,
+        diagnostic: diagnostic ? oneLine(diagnostic, 120) : undefined,
         preview: taskPreview,
         turns: result.usage?.turns ?? 0,
         tokens: (result.usage?.input ?? 0) + (result.usage?.output ?? 0),
@@ -921,6 +937,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             label: run.label,
             state: run.state,
             timeoutPhase: undefined,
+            diagnostic: undefined,
             preview: run.preview,
             model: run.model,
             attempts: run.attempts,
@@ -935,8 +952,8 @@ export default function registerSubagent(pi: ExtensionAPI): void {
               ? `; attempts${task.attempts ? ` (${task.attempts} total)` : ""}: ${task.attemptedModels.join(" → ")}`
               : "";
             const label = tasks.length > 1 ? `${run.label}/${task.label}` : task.label;
-            const state = task.timeoutPhase ? `${task.state} (${task.timeoutPhase})` : task.state;
-            return `- [${run.id.slice(0, 8)}] ${label}: ${state}${task.model ? ` on ${task.model}` : ""}${attemptText}${task.preview ? ` — ${task.preview}` : ""}${task.pointers.length ? ` (${task.pointers.join(", ")})` : ""}`;
+            const outcome = task.diagnostic ?? task.preview ?? task.state;
+            return `- [${run.id.slice(0, 8)}] ${label}: ${outcome}${task.model ? ` on ${task.model}` : ""}${attemptText}${task.pointers.length ? ` (${task.pointers.join(", ")})` : ""}`;
           });
         });
         pi.sendMessage({
@@ -961,9 +978,21 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         runtime.completions?.add(event.runId, !["completed", "partial"].includes(event.state));
       }
       if (ctx.hasUI && event.type === "terminal") {
+        const found = runtime.registry.lookup(event.runId, runtime.key);
+        const snapshot = found.status === "found" && found.run && !("controller" in found.run)
+          ? found.run
+          : undefined;
+        const diagnostic = snapshot
+          ? formatRunDiagnostic({
+            mode: snapshot.mode,
+            state: snapshot.state,
+            summary: snapshot.summary,
+            results: snapshot.results,
+          })
+          : undefined;
         runtime.footer?.notifyTerminal(
-          event.runId,
-          `Subagent ${event.runId.slice(0, 8)} ${event.state}`,
+          `terminal:${event.runId}:${event.state}`,
+          `Subagent ${event.runId.slice(0, 8)} ${diagnostic ?? event.state}`,
           event.state === "completed" ? "info" : "warn",
         );
       }
@@ -1034,6 +1063,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           label: run.label,
           state: run.state,
           timeoutPhase: undefined,
+          diagnostic: undefined,
           preview: run.preview,
           turns: run.turns,
           tokens: run.tokens,
@@ -1049,13 +1079,13 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             task.turns ? `↻${task.turns}` : "",
             task.tokens ? `${formatTokens(task.tokens)} tok` : "",
             task.cost > 0.00005 ? `$${task.cost.toFixed(3)}` : "",
-            task.timeoutPhase ? `timeout/${task.timeoutPhase}` : "",
             tasks.length === 1 ? formatDuration(run.durationMs) : "",
             task.model ?? "",
           ].filter(Boolean).join(" · ");
           const label = tasks.length > 1 ? `${run.label}/${task.label}` : task.label;
           lines.push(truncateToWidth(`${glyph} ${theme.fg("dim", task.model ?? "model unknown")} · ${theme.bold(theme.fg("toolTitle", label))} ${theme.fg("dim", `[${run.id.slice(0, 8)}] ${stats}`)}`, width));
-          if (task.preview) lines.push(truncateToWidth(`  ${theme.fg("dim", "⎿")} ${theme.fg("toolOutput", task.preview)}`, width));
+          const diagnostic = task.diagnostic ?? task.preview;
+          if (diagnostic) lines.push(truncateToWidth(`  ${theme.fg("dim", "⎿")} ${theme.fg("toolOutput", diagnostic)}`, width));
           if (task.attemptedModels && task.attemptedModels.length > 1) {
             lines.push(truncateToWidth(`  ${theme.fg("warning", `models: ${task.attemptedModels.join(" → ")}${task.attempts && task.attempts > task.attemptedModels.length ? ` (last ${task.attemptedModels.length} of ${task.attempts})` : ""}`)}`, width));
           }
@@ -1085,7 +1115,13 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       if (!runtime || runtime.key !== sessionKey(ctx)) return ctx.ui.notify("Subagent runtime is not ready", "error");
       await ctx.ui.custom(
         (tui: TUI, theme: Theme, _keybindings, done) => createSubagentsOverlay(tui, theme, makeAdapter(runtime), () => done(undefined)),
-        { overlay: true, overlayOptions: { width: "80%", maxHeight: "80%" } },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "80%",
+            maxHeight: `${SUBAGENTS_OVERLAY_MAX_HEIGHT_PERCENT}%` as `${number}%`,
+          },
+        },
       );
     },
   });
@@ -1332,9 +1368,10 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           }
           if (validated.mode === "apply") {
             const applied = await runtime.worktrees.apply({ cwd: tree.cwd, baseCommit: tree.baseCommit }, ctx.cwd);
+            const warning = applied.warning ? `\nWarning: ${oneLine(applied.warning, 400)}` : "";
             const text = applied.applied
-              ? `Applied worktree changes from run ${snapshot.id} task ${chosen.index} into ${ctx.cwd} as uncommitted working-tree changes:\n${applied.stat}\nReview and commit them. The worktree and branch ${tree.branch} are preserved; use action:'discard' to clean up.`
-              : `Worktree for run ${snapshot.id} task ${chosen.index} had no changes to apply.`;
+              ? `Applied worktree changes from run ${snapshot.id} task ${chosen.index} into ${ctx.cwd} as uncommitted working-tree changes:\n${applied.stat}${warning}\nReview and commit them. The worktree and branch ${tree.branch} are preserved; use action:'discard' to clean up.`
+              : `Worktree for run ${snapshot.id} task ${chosen.index} had no changes to apply.${warning}`;
             return { content: [{ type: "text", text }], details: details(snapshot.mode, snapshot.results, snapshot) };
           }
           // discard

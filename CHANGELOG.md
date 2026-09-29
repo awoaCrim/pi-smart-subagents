@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.5 — 2026-09-29
+
+### Synchronized TUI diagnostics and adaptive overlay details
+
+- Share bounded timeout, failure, cancellation and partial-result diagnostics across inline output, completion notifications, terminal notifications and `/subagents` details.
+- Preserve worktree-apply warnings, deduplicate footer notifications by run/transition identity, and size overlay detail pages from the current terminal height.
+
 ## 0.11.4 — 2026-09-29
 
 ### Durable pre-routing timeout evidence
