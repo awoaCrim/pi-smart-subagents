@@ -97,7 +97,7 @@ export interface BackendCapabilities {
 }
 
 export interface BackendAdapter {
-  readonly name: BackendName;
+  readonly name: string;
   readonly capabilities: BackendCapabilities;
   /**
    * Build the child invocation. May write temp files; return their parent
@@ -118,13 +118,9 @@ export interface BackendAdapter {
 export interface BackendLaunchContext {
   /** Directory child sessions are written to. */
   sessionDir: string;
-  /** Resolves the pi command/argv (pi backend only). */
+  /** Resolves the Pi command/argv. */
   getPiCommand: (args: string[]) => { command: string; args: string[] };
 }
-
-export type BackendName = "pi" | "codex" | "claude";
-
-export const BACKEND_NAMES: readonly BackendName[] = ["pi", "codex", "claude"];
 
 /**
  * Reject requests a backend cannot honor. Returns a list of human-readable
@@ -141,31 +137,31 @@ export function checkCapabilities(
     >
   >,
   capabilities: BackendCapabilities,
-  backend: BackendName,
+  adapterName: string,
 ): string[] {
   const problems: string[] = [];
   if (spec.maxCost !== undefined && !capabilities.costReporting) {
     problems.push(
-      `backend '${backend}' does not report per-turn cost, so max_cost cannot be enforced; drop max_cost or use max_turns/timeout_ms instead`,
+      `adapter '${adapterName}' does not report per-turn cost, so max_cost cannot be enforced; drop max_cost or use max_turns/timeout_ms instead`,
     );
   }
   if (spec.resume && !capabilities.resume) {
-    problems.push(`backend '${backend}' cannot resume child sessions; drop resume`);
+    problems.push(`adapter '${adapterName}' cannot resume child sessions; drop resume`);
   }
   if ((spec.forkResume || spec.contextFork) && !capabilities.fork) {
-    problems.push(`backend '${backend}' cannot fork sessions; drop fork_resume / context:'fork'`);
+    problems.push(`adapter '${adapterName}' cannot fork sessions; drop fork_resume / context:'fork'`);
   }
   // A read-only profile that cannot be enforced is a write-safety hole.
   if (spec.tools !== undefined && !capabilities.toolRestriction) {
     problems.push(
-      `backend '${backend}' cannot restrict the child's tools, so profile '${spec.profile ?? "explore"}' cannot be enforced; use profile:'general' with an explicitly writable backend, or the pi backend`,
+      `adapter '${adapterName}' cannot restrict the child's tools, so profile '${spec.profile ?? "explore"}' cannot be enforced; use profile:'general' with an explicitly writable adapter, or the Pi adapter`,
     );
   }
   if (spec.thinking !== undefined && !capabilities.thinking) {
-    problems.push(`backend '${backend}' does not support thinking level '${spec.thinking}'; omit thinking or use the pi backend`);
+    problems.push(`adapter '${adapterName}' does not support thinking level '${spec.thinking}'; omit thinking or use the Pi adapter`);
   }
   if (spec.outputSchema && !capabilities.outputSchema) {
-    problems.push(`backend '${backend}' does not support output_schema; drop it`);
+    problems.push(`adapter '${adapterName}' does not support output_schema; drop it`);
   }
   return problems;
 }

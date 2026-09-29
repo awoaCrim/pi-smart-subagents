@@ -11,9 +11,8 @@
 
 Goal: remove the duplicated cost footer, make inline chat rendering clean and
 smooth, and align every surface with Pi's native conventions. Informed by a
-code-level review against Pi's TUI docs/built-ins and a comparison with
-`@tintinweb/pi-subagents` (Claude Code-style reference), `nicobailon/pi-subagents`
-(highest-download orchestrator), and Claude Code's Task tool.
+code-level review against Pi's TUI docs/built-ins and comparisons with other
+subagent orchestrators and task-tool surfaces.
 
 ## Design principles (from the comparison research)
 
@@ -59,7 +58,7 @@ Files: `src/extension.ts` (`refreshFooter`), `src/ui.ts` (`FooterStatusModel`), 
 
 Files: `src/format.ts`, `src/extension.ts` (renderCall/renderResult), `src/schema.ts`.
 
-Adopt the Claude Code / tintinweb two-line collapsed block:
+Adopt the compact two-line collapsed block used by established subagent UIs:
 
 ```
 renderCall (static, one line):

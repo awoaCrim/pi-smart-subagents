@@ -43,7 +43,7 @@ import { Semaphore } from "./semaphore.js";
 import type { RunSnapshot, TaskResult, TaskSpec, UsageStats } from "./types.js";
 import { emptyUsage } from "./types.js";
 import { addUsage, buildUsageLedger, formatLedger, hasBilledUsage, routingUsage, toPiUsage, type UsageLedger } from "./usage.js";
-import { resolveBackendSessionFilePath, resolveSessionFilePath } from "./transcript.js";
+import { resolveSessionFilePath } from "./transcript.js";
 import { CompletionBatcher, COMPLETION_MESSAGE_TYPE, type CompletionDetails, type CompletionDetailsRun, type CompletionDetailsTask } from "./notifications.js";
 import { describeCatalog, discoverAgents, type AgentDefinition } from "./agents.js";
 import { createSubagentsOverlay, FooterStatusModel, type SubagentAdapter } from "./ui.js";
@@ -209,12 +209,6 @@ function makeAdapter(runtime: SessionRuntime): SubagentAdapter {
       const result = run?.results.find((entry) => entry.sessionId);
       const sessionId = result?.sessionId;
       if (!sessionId) return undefined;
-      // Non-pi backends keep transcripts in their own vendor locations, so the
-      // live view resolves per backend instead of assuming pi's session dir.
-      const backend = result?.backend ?? "pi";
-      if (backend !== "pi") {
-        return resolveBackendSessionFilePath(backend, sessionId, { cwd: runtime.ctx.cwd });
-      }
       return resolveSessionFilePath(runtime.config.sessionDir, sessionId);
     },
   };
@@ -622,6 +616,7 @@ function buildCompletionDetails(runtime: SessionRuntime, runIds: string[]): Comp
       return {
         label: result.label ?? snapshot.taskPreviews[index] ?? `task-${index + 1}`,
         state: result.state,
+        timeoutPhase: result.timeoutPhase,
         preview: taskPreview,
         turns: result.usage?.turns ?? 0,
         tokens: (result.usage?.input ?? 0) + (result.usage?.output ?? 0),
@@ -925,6 +920,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           const tasks = run.tasks?.length ? run.tasks : [{
             label: run.label,
             state: run.state,
+            timeoutPhase: undefined,
             preview: run.preview,
             model: run.model,
             attempts: run.attempts,
@@ -939,7 +935,8 @@ export default function registerSubagent(pi: ExtensionAPI): void {
               ? `; attempts${task.attempts ? ` (${task.attempts} total)` : ""}: ${task.attemptedModels.join(" → ")}`
               : "";
             const label = tasks.length > 1 ? `${run.label}/${task.label}` : task.label;
-            return `- [${run.id.slice(0, 8)}] ${label}: ${task.state}${task.model ? ` on ${task.model}` : ""}${attemptText}${task.preview ? ` — ${task.preview}` : ""}${task.pointers.length ? ` (${task.pointers.join(", ")})` : ""}`;
+            const state = task.timeoutPhase ? `${task.state} (${task.timeoutPhase})` : task.state;
+            return `- [${run.id.slice(0, 8)}] ${label}: ${state}${task.model ? ` on ${task.model}` : ""}${attemptText}${task.preview ? ` — ${task.preview}` : ""}${task.pointers.length ? ` (${task.pointers.join(", ")})` : ""}`;
           });
         });
         pi.sendMessage({
@@ -1036,6 +1033,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         const tasks = run.tasks?.length ? run.tasks : [{
           label: run.label,
           state: run.state,
+          timeoutPhase: undefined,
           preview: run.preview,
           turns: run.turns,
           tokens: run.tokens,
@@ -1051,6 +1049,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             task.turns ? `↻${task.turns}` : "",
             task.tokens ? `${formatTokens(task.tokens)} tok` : "",
             task.cost > 0.00005 ? `$${task.cost.toFixed(3)}` : "",
+            task.timeoutPhase ? `timeout/${task.timeoutPhase}` : "",
             tasks.length === 1 ? formatDuration(run.durationMs) : "",
             task.model ?? "",
           ].filter(Boolean).join(" · ");
@@ -1124,13 +1123,88 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       const requestGeneration = runtime.routingGeneration;
       const invocationStartedAt = Date.now();
       const management = params.action !== undefined && params.action !== "plan";
-      const routingScope = management ? undefined : beginRouting(runtime, signal);
+      let routingScope: ReturnType<typeof beginRouting> | undefined;
+      let preparedTasks: PreparedTask[] | undefined;
+      let registeredRun: {
+        id: string;
+        controller: AbortController;
+        resolveDone: () => void;
+        directResumes: string[];
+        specs: TaskSpec[];
+        childStarted: boolean;
+        completed: boolean;
+        parentAbort: () => void;
+      } | undefined;
+
+      const completePrelaunch = (error: unknown, tasks: readonly PreparedTask[]): void => {
+        const registration = registeredRun;
+        if (!registration || registration.childStarted || registration.completed) return;
+        registration.completed = true;
+        const cancelledBeforeAbort = signal?.aborted || runtime.routingPaused || registration.controller.signal.aborted;
+        registration.controller.abort();
+        signal?.removeEventListener("abort", registration.parentAbort);
+        const scope = routingScope;
+        const message = utf8Preview(error instanceof Error ? error.message : String(error), 2_000) || "Subagent dispatch failed before child launch.";
+        const timedOut = tasks.some((task) => task.deadline !== undefined && Date.now() >= task.deadline)
+          || [...(scope?.receipts.values() ?? [])].some((receipt) => receipt.outcome === "timeout" || receipt.code === "timeout")
+          || /\bJev timeout\b|routing selection (?:deadline|exceeded)|timeout (?:before|during) (?:Jev|routing)/i.test(message);
+        const cancelled = cancelledBeforeAbort;
+        const state = cancelled ? "cancelled" as const : timedOut ? "timeout" as const : "failed" as const;
+        const stopReason = state === "timeout" ? "timeout" : state === "cancelled" ? "cancelled" : "routing_error";
+        const found = runtime.registry.lookup(registration.id, runtime.key);
+        const live = found.status === "found" && found.run && "controller" in found.run ? found.run : undefined;
+        const specs = registration.specs;
+        const baseResults: TaskResult[] = live?.results ?? specs.map((spec, index) => ({
+          index,
+          label: spec.label || `task-${index + 1}`,
+          task: spec.task,
+          state: "queued" as const,
+          exitCode: null,
+          messages: [],
+          stderr: "",
+          usage: emptyUsage(),
+          model: spec.model,
+          routing: spec.routing,
+          thinking: spec.thinking,
+          profile: spec.profile,
+          canWrite: spec.canWrite,
+          outputFile: spec.output,
+          outputMode: spec.outputMode,
+          protocol: { headerSeen: false, assistantEndSeen: false, agentEndSeen: false, agentSettledSeen: false, validEvents: 0, parseErrors: 0 },
+        }));
+        const results = baseResults.map((previous, index) => {
+          const spec = specs[index]!;
+          const errorMessage = utf8Preview([previous.errorMessage, message].filter(Boolean).join("; "), 2_000);
+          return {
+            ...previous,
+            index,
+            label: previous.label || spec.label || `task-${index + 1}`,
+            task: previous.task || spec.task,
+            state,
+            exitCode: previous.exitCode ?? (state === "cancelled" ? null : 1),
+            stopReason,
+            timeoutPhase: state === "timeout" ? "routing" as const : undefined,
+            errorMessage,
+            model: previous.model ?? spec.model,
+            routing: previous.routing ?? spec.routing,
+            thinking: previous.thinking ?? spec.thinking,
+            profile: previous.profile ?? spec.profile,
+            canWrite: previous.canWrite ?? spec.canWrite,
+            outputFile: previous.outputFile ?? spec.output,
+            outputMode: previous.outputMode ?? spec.outputMode,
+          } satisfies TaskResult;
+        });
+        try {
+          runtime.registry.complete(registration.id, runtime.key, state, message, results);
+        } finally {
+          for (const session of registration.directResumes) runtime.registry.releaseResumeLock(session, runtime.key, registration.id);
+          registration.resolveDone();
+        }
+      };
+
       try {
-      routingScope?.assertOwner();
-      if (routingScope) { await requireRoutingPersistence(runtime); routingScope.assertOwner(); }
       // Management does not read a config file, credential or model/tool catalog.
       const dispatchConfig = management ? runtime.config : loadConfig(await readConfigFile());
-      routingScope?.assertOwner();
       const parentTools = management ? [] : pi.getAllTools()
         .filter((tool) => tool.sourceInfo?.source !== "sdk" && !tool.sourceInfo?.path?.startsWith("<sdk:"));
       const parent: ParentContext = {
@@ -1322,7 +1396,43 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         return deliveredResult(text, details(terminal.mode, delivered.cappedResults as any, terminal), terminal.results, selectorUsage);
       }
 
+      preparedTasks = validated.tasks.map((task) => ({ ...task, deadline: invocationStartedAt + task.timeoutMs }));
+      if (validated.planOnly) {
+        routingScope = beginRouting(runtime, signal);
+      } else {
+        const runId = runtime.registry.allocateRunId();
+        const controller = new AbortController();
+        const parentAbort = () => controller.abort();
+        if (signal?.aborted) controller.abort();
+        else signal?.addEventListener("abort", parentAbort, { once: true });
+        let resolveDone!: () => void;
+        const done = new Promise<void>((resolve) => { resolveDone = resolve; });
+        const placeholders: TaskSpec[] = validated.tasks.map((task) => {
+          const { candidateTools, requestedThinking: _requestedThinking, parentThinking: _parentThinking, resolutionNotes: _notes, ...spec } = task;
+          return { ...spec, tools: [...candidateTools], model: undefined, routing: undefined };
+        });
+        registeredRun = {
+          id: runId,
+          controller,
+          resolveDone,
+          directResumes: [],
+          specs: placeholders,
+          childStarted: false,
+          completed: false,
+          parentAbort,
+        };
+        try {
+          runtime.registry.start(runtime.key, validated.mode as "single" | "parallel", placeholders, controller, done, validated.tasks.map((task) => task.label), runId);
+        } catch (error) {
+          signal?.removeEventListener("abort", parentAbort);
+          throw error;
+        }
+        routingScope = beginRouting(runtime, controller.signal, runId);
+      }
+
       if (!routingScope) fail("Internal routing scope is missing.");
+      routingScope.assertOwner();
+      await requireRoutingPersistence(runtime);
       routingScope.assertOwner();
       const catalog: RoutingCatalog = {
         models: eligibleModelCandidates(dispatchConfig.jevRouting!, ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`)),
@@ -1330,7 +1440,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       };
       if (!catalog.models.length) fail("No configured Jev candidate is locally available. Check exact model IDs and configured provider authentication.");
       const router = new JevRouter({ config: dispatchConfig.jevRouting!, onReceipt: routingScope.record });
-      const prepared = validated.tasks.map((task) => ({ ...task, deadline: invocationStartedAt + task.timeoutMs }));
+      const prepared = preparedTasks!;
       await runPlanPreflights(runtime, prepared, ctx.cwd, routingScope);
       routingScope.assertOwner();
       const resolved = await routePreparedTasks(prepared, catalog, router, {
@@ -1376,33 +1486,23 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       const specs: TaskSpec[] = resolved.map(({ effectiveTools, resolutionNotes: _notes, ...task }) => ({
         ...task, tools: effectiveTools, fallbackModels: [],
       }));
+      if (!registeredRun) fail("Internal dispatch registration is missing.");
+      registeredRun.specs = specs;
+      if (!runtime.registry.updateSpecs(registeredRun.id, runtime.key, specs)) fail("The registered subagent run is no longer live; no child was started.");
       await requireRoutingPersistence(runtime);
       routingScope.assertOwner();
       if (validated.async && routingScope.receipts.size > MAX_ROUTING_DELIVERY_IDS) fail(`Background routing exceeds ${MAX_ROUTING_DELIVERY_IDS} selector receipts. No child was started; split this request into smaller invocations. Selector usage is retained in the ledger.`);
       const executionGeneration = routingScope.generation;
-      const runId = runtime.registry.allocateRunId();
+      const runId = registeredRun.id;
+      const controller = registeredRun.controller;
+      const parentAbort = registeredRun.parentAbort;
       const workerReceiptIds = new Set(routingScope.receipts.keys());
-      for (const receipt of routingScope.receipts.values()) recordRouting(runtime, executionGeneration, receipt, runId);
-      await requireRoutingPersistence(runtime);
-      routingScope.assertOwner();
       const directResumes = resolved.filter((task) => task.resume && !task.forkResume).map((task) => task.resume!);
+      registeredRun.directResumes = directResumes;
       const lock = runtime.registry.acquireResumeLocks(directResumes, runId, runtime.key);
       if (!lock.ok) fail(`Child session ${lock.conflict!.sessionId} is already active in run ${lock.conflict!.runId}. Use fork_resume:true for an independent continuation.`);
 
-      const controller = new AbortController();
-      const parentAbort = () => controller.abort();
-      if (signal?.aborted) controller.abort();
-      else signal?.addEventListener("abort", parentAbort, { once: true });
-      let resolveDone!: () => void;
-      const done = new Promise<void>((resolve) => { resolveDone = resolve; });
-      try {
-        runtime.registry.start(runtime.key, validated.mode as "single" | "parallel", specs, controller, done, resolved.map((task) => task.label), runId);
-      } catch (error) {
-        signal?.removeEventListener("abort", parentAbort);
-        for (const session of directResumes) runtime.registry.releaseResumeLock(session, runtime.key, runId);
-        throw error;
-      }
-
+      registeredRun.childStarted = true;
       routingScope.finish(); // Ownership transfers to the registered run/controller.
 
       // Throttle streamed tool updates with a trailing-edge flush: structural
@@ -1543,7 +1643,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
               ...previous,
               index, label: spec.label || `task-${index + 1}`, task: spec.task,
               model: previous?.model ?? spec.model, routing: spec.routing,
-              thinking: spec.thinking, profile: spec.profile, backend: spec.backend ?? "pi",
+              thinking: spec.thinking, profile: spec.profile,
               canWrite: spec.canWrite, outputFile: previous?.outputFile ?? spec.output, outputMode: spec.outputMode,
               state: previous && !isActiveState(previous.state) ? previous.state : "failed",
               exitCode: previous && !isActiveState(previous.state) ? previous.exitCode : 1,
@@ -1561,7 +1661,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           runtime.liveRunners.delete(runId);
           signal?.removeEventListener("abort", parentAbort);
           for (const session of directResumes) runtime.registry.releaseResumeLock(session, runtime.key, runId);
-          resolveDone();
+          registeredRun?.resolveDone();
         }
       })();
 
@@ -1590,6 +1690,9 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       return firstDelivery
         ? deliveredResult(text, resultDetails, result.results, selectorUsage)
         : { content: [{ type: "text", text }], details: resultDetails };
+      } catch (error) {
+        if (registeredRun && !registeredRun.childStarted) completePrelaunch(error, preparedTasks ?? []);
+        throw error;
       } finally {
         routingScope?.finish();
       }

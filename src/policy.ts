@@ -6,7 +6,7 @@ import { defaultConfig, type TaskDefaults, type TaskDefaultsByProfile } from "./
 import type { ModelAttemptSpec, OutputMode, TaskDifficulty, TaskProfile, TaskSpec } from "./types.js";
 import { isTaskDifficulty, TASK_DIFFICULTIES } from "./types.js";
 import type { ParallelTaskInput, SubagentParams } from "./schema.js";
-import { BACKEND_NAMES, checkCapabilities, type BackendName } from "./backend.js";
+import { checkCapabilities } from "./backend.js";
 import { resolveBackend } from "./backends/index.js";
 import { validateModelRanking } from "./model-failover.js";
 import type { JevRoutingConfig, RoutingDecision, RoutingModelCandidate } from "./routing-types.js";
@@ -29,19 +29,7 @@ export const READ_ONLY_TOOLS = new Set([
   "web_search",
   "web_fetch",
 ]);
-/**
- * Pi context-management tools are control-plane capabilities: they may update
- * continuity notes or the remote context window, but they cannot modify the
- * child checkout. Keep them separate from ordinary source-inspection tools so
- * the read-only profile's exception remains explicit.
- */
-export const CONTEXT_MANAGEMENT_TOOLS = new Set([
-  "new_context",
-  "get_context_remaining",
-  "history",
-  "notes",
-]);
-const NON_WRITING_TOOLS = new Set([...READ_ONLY_TOOLS, ...CONTEXT_MANAGEMENT_TOOLS]);
+const NON_WRITING_TOOLS = READ_ONLY_TOOLS;
 export const KNOWN_WRITE_TOOLS = new Set(["bash", "edit", "write"]);
 /** Backward-compatible export; policy uses fail-closed classification above. */
 export const WRITE_TOOLS = KNOWN_WRITE_TOOLS;
@@ -67,7 +55,6 @@ export interface ResolvedTask extends TaskSpec {
 /** Local preparation cannot launch: it has candidates, not an execution model/tools. */
 export interface PreparedTask extends Omit<ResolvedTask, "model" | "canWrite" | "effectiveTools" | "routing"> {
   candidateTools: string[];
-  mandatoryTools: string[];
   /** Request > agent > profile. Selected candidate and parent are applied only after routing. */
   requestedThinking?: TaskSpec["thinking"];
   parentThinking?: TaskSpec["thinking"];
@@ -108,17 +95,9 @@ function resolveTools(
   profile: TaskProfile,
   requested: string[] | undefined,
   availableTools: string[],
-  backend: BackendName,
 ): { tools?: string[]; canWrite?: boolean; error?: string } {
   const available = new Set(availableTools);
-  const contextTools = backend === "pi"
-    ? [...CONTEXT_MANAGEMENT_TOOLS].filter((tool) => available.has(tool))
-    : [];
-  const nonWritingTools = backend === "pi" ? NON_WRITING_TOOLS : READ_ONLY_TOOLS;
-  // Keep Pi's context-management control plane available to every child when
-  // the parent exposes it, even if the task requested a narrower tool subset.
-  const addContextTools = (tools: readonly string[]): string[] =>
-    [...new Set([...tools, ...contextTools])];
+  const nonWritingTools = NON_WRITING_TOOLS;
 
   if (requested) {
     const unknown = requested.filter((tool) => !available.has(tool));
@@ -126,7 +105,7 @@ function resolveTools(
   }
 
   if (profile === "explore" || profile === "review") {
-    const source = addContextTools(requested ?? [...nonWritingTools].filter((tool) => available.has(tool)));
+    const source = requested ?? [...nonWritingTools].filter((tool) => available.has(tool));
     const unsafe = source.filter((tool) => !nonWritingTools.has(tool));
     if (unsafe.length) {
       return {
@@ -136,7 +115,7 @@ function resolveTools(
     return { tools: source, canWrite: false };
   }
 
-  const source = addContextTools(requested ?? availableTools);
+  const source = requested ?? availableTools;
   const unknown = source.filter((tool) => !available.has(tool));
   if (unknown.length) return { error: `Candidate tools are unavailable: ${unknown.join(", ")}` };
   // General-profile custom tools are conservatively write-capable unless explicitly known non-writing.
@@ -174,7 +153,6 @@ function normalizeTask(
     allow_shared_writes?: boolean;
     keep_background?: boolean;
     include_wip?: boolean;
-    backend?: BackendName;
   },
   index: number,
   parent: ParentContext,
@@ -236,18 +214,13 @@ function normalizeTask(
     }
   }
 
-  const backend: BackendName = item.backend ?? agent?.backend ?? "pi";
-  if (!BACKEND_NAMES.includes(backend)) {
-    return { error: `Task ${index + 1}: unknown backend '${backend}' (expected ${BACKEND_NAMES.join(", ")})` };
-  }
-  if (backend !== "pi") return { error: `Task ${index + 1}: new Jev-routed work supports backend:"pi" only; ${backend} is not supported. Existing-run management remains available.` };
   const profile = item.profile ?? agent?.profile ?? defaultProfile;
   const requestedTools = item.tools;
   const childDepth = (parent.depth ?? parseDepth()) + 1;
   const nestedAllowed = profile === "general" && childDepth < (defaults.maxDepth ?? defaultConfig.maxDepth)
     && agent?.spawns !== false && (!Array.isArray(agent?.spawns) || agent.spawns.length > 0);
   const availableTools = parent.availableTools.filter((tool) => nestedAllowed || !["subagent", "subagent_wait"].includes(tool));
-  const resolved = resolveTools(profile, requestedTools, availableTools, backend);
+  const resolved = resolveTools(profile, requestedTools, availableTools);
   if (resolved.error || !resolved.tools || resolved.canWrite === undefined) return { error: resolved.error ?? "Tool resolution failed" };
   const cwd = resolvePath(parent.cwd, item.cwd);
   const output = item.output ? resolvePath(cwd, item.output) : undefined;
@@ -266,9 +239,9 @@ function normalizeTask(
       : `task-${index + 1}`;
   const systemPrompt = [agent?.systemPrompt, item.system_prompt].filter(Boolean).join("\n\n") || undefined;
 
-  // Backend capability gate. Refuse combinations the backend cannot honor
+  // Adapter capability gate. Refuse combinations the child adapter cannot honor
   // rather than silently dropping a budget or a read-only guarantee.
-  const capabilities = resolveBackend(backend).capabilities;
+  const capabilities = resolveBackend().capabilities;
   const problems = checkCapabilities(
     {
       maxCost: item.max_cost ?? agent?.maxCost ?? profileDefaults.maxCost,
@@ -285,7 +258,7 @@ function normalizeTask(
       canWrite: resolved.canWrite,
     },
     capabilities,
-    backend,
+    "pi",
   );
   if (problems.length) {
     return { error: `Task ${index + 1}: ${problems.join("; ")}` };
@@ -293,7 +266,6 @@ function normalizeTask(
 
   return {
     task: {
-      backend,
       label,
       task: repairDoubleEncodedText(item.task.trim()),
       systemPrompt: systemPrompt ? repairDoubleEncodedText(systemPrompt) : systemPrompt,
@@ -302,8 +274,7 @@ function normalizeTask(
       parentThinking: parent.thinking,
       thinking: requestedThinking,
       difficulty,
-      candidateTools: resolved.tools.filter((tool) => !CONTEXT_MANAGEMENT_TOOLS.has(tool)),
-      mandatoryTools: resolved.tools.filter((tool) => CONTEXT_MANAGEMENT_TOOLS.has(tool)),
+      candidateTools: resolved.tools,
       profile,
       cwd,
       timeoutMs: item.timeout_ms ?? agent?.timeoutMs ?? profileDefaults.timeoutMs ?? defaults.defaultTimeoutMs ?? defaultConfig.defaultTimeoutMs,
@@ -328,7 +299,6 @@ function normalizeTask(
       spawns: agent?.spawns,
 
       resolutionNotes: [
-        `backend=${backend}`,
         `profile=${profile}`,
 
         ...(agent ? [`agent=${agent.name}`] : []),
@@ -556,7 +526,7 @@ export function finalizeRoutedTasks(
     if (new Set(decision.selectedTools).size !== decision.selectedTools.length || decision.selectedTools.some((tool) => !item.candidateTools.includes(tool))) {
       return { ok: false, error: `Task ${index + 1}: selector chose tools outside the locally permitted candidates.` };
     }
-    const tools = [...new Set([...decision.selectedTools, ...item.mandatoryTools])];
+    const tools = [...new Set(decision.selectedTools)];
     const canWrite = tools.some((tool) => !NON_WRITING_TOOLS.has(tool));
     if (item.profile !== "general" && canWrite) return { ok: false, error: `Task ${index + 1}: writable selector choice violates ${item.profile}.` };
     // The probability ranking is mandatory for every new route: without it there
@@ -565,7 +535,7 @@ export function finalizeRoutedTasks(
     const ranked = decision.rankedModels;
     const rankingProblem = validateModelRanking(ranked, models.map((entry) => entry.model), decision.selectedModel);
     if (rankingProblem) return { ok: false, error: `Task ${index + 1}: ${rankingProblem}.` };
-    const { candidateTools: _candidates, mandatoryTools, requestedThinking, parentThinking, ...spec } = item;
+    const { candidateTools: _candidates, requestedThinking, parentThinking, ...spec } = item;
     // One frozen attempt plan per ranked candidate: same shared tools and route,
     // per-candidate thinking under explicit > agent > profile > candidate > parent.
     const modelAttemptPlan: ModelAttemptSpec[] = [];
@@ -586,7 +556,7 @@ export function finalizeRoutedTasks(
       ...spec, model: candidate.model, thinking: first.thinking, tools, effectiveTools: tools, canWrite,
       fallbackModels: [],
       modelAttemptPlan: Object.freeze(modelAttemptPlan),
-      routing: { ...decision, mandatoryTools: [...mandatoryTools], outcome: "success" },
+      routing: { ...decision, outcome: "success" },
       resolutionNotes: [...item.resolutionNotes.filter((note) => !note.startsWith("routing=")), "routing=jev", `access=${canWrite ? "RW" : "RO"}`],
     });
   }

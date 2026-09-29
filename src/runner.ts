@@ -84,7 +84,7 @@ export interface RunnerOptions {
    * the real prompt). Defaults to 30s and is always clamped by the remaining task time.
    */
   startupTimeoutMs?: number;
-  /** Backend adapter override (defaults to the spec's backend, then pi). */
+  /** Optional child adapter override for focused tests; the default is Pi. */
   backend?: BackendAdapter;
   /**
    * Usage already billed by prior ranked attempts of the same task. Affects
@@ -162,8 +162,8 @@ export class ChildRunner {
   /** Prior-attempt usage included in budget comparisons (never in returned usage). */
   private readonly budgetOffset?: UsageStats;
   private readonly deferRunTerminal: boolean;
-  /** Backend for the in-flight run; set at spawn so steer() uses the right dialect. */
-  private backend: BackendAdapter = resolveBackend("pi");
+  /** Adapter for the in-flight run; set at spawn so steering uses its command dialect. */
+  private backend: BackendAdapter = resolveBackend();
 
   constructor(
     private readonly semaphore = new Semaphore(
@@ -223,7 +223,6 @@ export class ChildRunner {
       outputMode: spec.outputMode,
       thinking: spec.thinking,
       profile: spec.profile,
-      backend: spec.backend ?? "pi",
       canWrite: spec.canWrite,
       startedAt,
       protocol: {
@@ -250,10 +249,9 @@ export class ChildRunner {
     let timeoutPhase: TimeoutPhase | undefined;
     let abortHandler: (() => void) | undefined;
     let stderr = "";
-    // Backend resolution happens before anything else so parser dialect,
+    // Adapter resolution happens before anything else so parser dialect,
     // capability checks and stdin command shapes all agree.
-    const backend =
-      this.backendOverride ?? resolveBackend(spec.backend ?? "pi");
+    const backend = this.backendOverride ?? resolveBackend();
     this.backend = backend;
     const parser: BackendParser = backend.createParser();
     let spawned = false;
@@ -655,9 +653,8 @@ export class ChildRunner {
         // RPC children stay alive until stdin closes; end it once the run settles.
         // Modern Pi uses agent_settled. Older/reduced hosts omit willRetry on a
         // terminal agent_end and never emit agent_settled, so that marker is the
-        // explicit legacy fallback. Only the Pi JSONL backend owns this marker
-        // contract; Codex/Claude synthesize agent-end before their settled update.
-        // An explicit willRetry:false remains non-final until agent_settled because
+        // explicit legacy fallback for reduced Pi hosts. An explicit
+        // willRetry:false remains non-final until agent_settled because
         // modern hosts can still do post-agent work.
         if (
           update.type === "agent-settled" ||
@@ -1214,7 +1211,6 @@ export class ChildRunner {
         outputMode: spec.outputMode,
         thinking: spec.thinking,
         profile: spec.profile,
-        backend: spec.backend ?? "pi",
         // Routed children were startup-verified against the exact `provider/model`
         // identity; provider message payloads may echo a bare ID, which must never
         // become the recorded actual model of an attempt.

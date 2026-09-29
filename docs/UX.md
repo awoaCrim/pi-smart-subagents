@@ -43,6 +43,7 @@ The standalone pi-subagent provides rich TUI support for monitoring, inspecting,
   `… +N lines` trailer pointing at the artifact/child session.
 - Expanded detail adds a bounded route summary for Jev-routed runs: original selection, ranked probabilities, shared selected tools (plus locally added control-plane tools), selector version, answer-level confidence, outcome and selection latency. The actual execution model stays separate from the original choice. Large lists show a preview and total count; old runs without new fields remain readable. Compact results and completion notifications show at most the last five attempt models and label a shortened chain with its total attempt count.
 - Durations freeze at `endedAt`; running durations tick at render time.
+- A deadline that expires before child launch is shown as `timeout (routing)`; child queue/start/run/cancel phases retain their own timeout labels. The run id remains discoverable even when routing or setup fails, so status/wait can collect the bounded evidence without starting a duplicate child.
 - Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
 
 ### Footer status
@@ -82,8 +83,8 @@ text with run ids and a `wait { id }` pointer.
 - List: two lines per run — glyph/id/state/stats, then the task preview.
   Selection cursor `▶`, animated spinner for live runs.
 - Detail: run stats, summary, then per-task sections (glyph, label,
-  model/selector route/profile/thinking, usage, pointers, transcript/final
-  output/errors), scrollable with ↑↓/j/k and PageUp/PageDown.
+  model/selector route/profile/thinking, timeout phase, usage, pointers,
+  transcript/final output/errors), scrollable with ↑↓/j/k and PageUp/PageDown.
 - Actions: `c` cancel, `s` steer (prompts for a message, injects it into the
   running child), `d` dismiss, `r` resume, `o` output pointers, `a` apply a
   finished run's changed worktree into the main checkout (confirm dialog),
@@ -135,6 +136,8 @@ Earlier attempts retain bounded, attributed output previews and child-session po
 - **Queued/Running**: spinner + live stats + activity tail from live text.
 - **Completed/Partial/Failed/Cancelled/Timeout/Lost**: state glyph, frozen
   duration, usage summary, output pointers; failures show the error message.
+  Timeout details identify `routing` separately from child `queued`, `starting`,
+  `running` or `cancelling` phases.
 - **Delivered vs Undelivered**: footer/overlay track pending delivery.
 - **Notification**: one per terminal transition to avoid spam.
 

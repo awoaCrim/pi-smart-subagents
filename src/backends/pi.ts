@@ -80,10 +80,9 @@ export class PiBackend implements BackendAdapter {
     }
     if (spec.model) args.push("--model", spec.model);
     if (spec.thinking) args.push("--thinking", spec.thinking);
-    // A routed task's finalized tools are already profile-filtered and include the
-    // mandatory Pi control-plane tools; the parent applies depth/spawn/profile gating
-    // before `subagent`/`subagent_wait` become candidates, so they are no longer
-    // stripped here. Unrouted (trusted SDK) callers keep the historical behaviour.
+    // A routed task's finalized tools are already profile-filtered; the parent
+    // applies depth/spawn/profile gating before nested dispatch tools become
+    // candidates. Unrouted (trusted SDK) callers keep the historical behaviour.
     let toolList: string[] | undefined;
     if (spec.tools !== undefined) {
       toolList = routed ? [...new Set(spec.tools)] : spec.tools.filter((tool) => tool !== "subagent");

@@ -90,7 +90,6 @@ export function toPersistedResult(result: TaskResult): PersistedResult {
     model: result.model,
     thinking: result.thinking,
     profile: result.profile,
-    backend: result.backend,
     canWrite: result.canWrite,
     outputFile: result.outputFile,
     outputMode: result.outputMode,
@@ -131,6 +130,7 @@ function resultFingerprint(result: TaskResult): string {
     result.liveText?.length ?? 0,
     result.transcript?.length ?? 0,
     result.errorMessage?.length ?? 0,
+    result.timeoutPhase ?? "",
     result.stalledSince ?? 0,
     result.attempts ?? 0,
     result.worktree ? 1 : 0,
@@ -175,7 +175,6 @@ export function toCheckpointResult(result: TaskResult): PersistedResult {
     model: result.model,
     thinking: result.thinking,
     profile: result.profile,
-    backend: result.backend,
     canWrite: result.canWrite,
     outputFile: result.outputFile,
     outputMode: result.outputMode,
@@ -396,7 +395,6 @@ export class SessionScopedRunRegistry {
       routing: spec.routing,
       thinking: spec.thinking,
       profile: spec.profile,
-      backend: spec.backend,
       canWrite: spec.canWrite,
       protocol: {
         headerSeen: false,
@@ -432,6 +430,36 @@ export class SessionScopedRunRegistry {
     });
     this.emitChanged(sessionKey, id, true);
     return id;
+  }
+
+  /** Replace the bounded pre-routing placeholders with the finalized task specs. */
+  updateSpecs(id: string, sessionKey: string, specs: TaskSpec[]): boolean {
+    const runtime = this.runtimes.get(sessionKey);
+    const run = runtime?.runs.get(id);
+    if (!runtime || !run || run.sessionKey !== sessionKey || runtime.shuttingDown || specs.length !== run.results.length) return false;
+
+    run.taskSpecs = specs.map((spec) => ({ ...spec, tools: spec.tools ? [...spec.tools] : undefined }));
+    run.taskPreviews = specs.map((spec, index) => `${spec.label || `task-${index + 1}`}: ${spec.task.slice(0, 120)}`);
+    for (let index = 0; index < specs.length; index++) {
+      const spec = specs[index]!;
+      const result = run.results[index]!;
+      result.label = spec.label || `task-${index + 1}`;
+      result.task = spec.task;
+      result.outputFile = spec.output;
+      result.outputMode = spec.outputMode;
+      result.model = spec.model;
+      result.routing = spec.routing;
+      result.thinking = spec.thinking;
+      result.profile = spec.profile;
+      result.canWrite = spec.canWrite;
+    }
+    this.persistence.persist(id, sessionKey, "checkpoint", {
+      state: run.state,
+      taskPreviews: run.taskPreviews,
+      results: run.results.map(toCheckpointResult),
+    });
+    this.emitChanged(sessionKey, id, true);
+    return true;
   }
 
   checkpoint(

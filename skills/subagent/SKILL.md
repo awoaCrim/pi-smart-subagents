@@ -59,21 +59,15 @@ from isolation, parallelism, or a fresh context.
 
 | Profile   | Tools                                                     | Writes                                      |
 | --------- | --------------------------------------------------------- | ------------------------------------------- |
-| `explore` | locally permitted read-only tools + Pi context tools      | no project-file writes                      |
+| `explore` | locally permitted read-only tools                         | no project-file writes                      |
 | `review`  | same as explore                                           | no project-file writes                      |
-| `general` | Jev chooses from the full available locally permitted catalog + Pi context tools | yes if the selected tools include bash/edit/write |
+| `general` | Jev chooses from the full available locally permitted catalog | yes if the selected tools include bash/edit/write |
 
 Jev picks individual tool names, not a capability bundle. Candidates come from
 the full available locally permitted catalog, not from agent `tools` defaults and
 not from only the parent's active tools. An explicit `tools` list is a ceiling,
 explore/review stay read-only regardless of the answer, and an empty selection
 never means "all tools".
-
-For Pi children, `new_context`, `get_context_remaining`, `history`, and
-`notes` are added locally when the parent exposes them, so the selector never
-asks about them. They are control-plane tools: they may update context
-notes/window state, but never grant `bash`, `edit`, or `write` access. Route
-metadata reports them as local additions.
 
 The finalized tool subset is passed to the child as Pi's `--tools` allowlist
 (`--no-tools` for a true empty set). Pi 0.86.0 is the verified baseline for
@@ -83,36 +77,36 @@ refused rather than silently weakened.
 Parallel write-capable tasks sharing one checkout are rejected unless each uses
 `isolation: "worktree"`, a distinct `cwd`, or `allow_shared_writes: true`.
 
-## Backends
+## Runtime
 
-New dispatch is Pi-only. `backend: "codex"` or `backend: "claude"` on new work
-is **refused** before any selector or provider work, including a backend
-inherited from agent frontmatter, and is never silently switched to Pi. Existing
-Codex/Claude runs remain manageable through `status`/`wait`/`cancel`/`steer`/
-`diff`/`apply`/`discard`.
+New extension-managed dispatch runs through Pi's RPC child runtime. Jev selects
+an execution model and ordinary locally permitted tools; the extension does not
+add hidden tools or switch to another child runtime. Unsupported capability
+combinations are **refused**, not silently degraded:
 
-Another provider's execution model is still eligible through Pi when the user
-lists it in their candidate configuration. Unsupported combinations inside the
-Pi path are **refused**, not silently degraded:
-
-|                          | pi             |
-| ------------------------ | -------------- |
+|                          | Pi            |
+| ------------------------ | ------------- |
 | `max_cost`               | yes (provider-reported execution only; not selector currency) |
 | read-only profile        | tool allowlist |
-| steering / grace wrap-up | yes            |
-| `context: "fork"`        | yes            |
-| `thinking`               | yes            |
-| `output_schema`          | yes            |
+| steering / grace wrap-up | yes           |
+| `context: "fork"`        | yes           |
+| `thinking`               | yes           |
+| `output_schema`          | yes           |
 
 ## Budgets and safety
 
 - Prefer `max_turns`, `max_cost`, and/or `timeout_ms` on long or write-capable runs.
   `timeout_ms` is absolute: local preflight, Jev selection, setup, queue and
-  runtime all count against it.
+  runtime all count against it. Real dispatches are registered before the
+  pre-spawn phases, so a deadline there is reported as `timeout (routing)` with
+  the full run id. Use `async: true` when work must outlive the initiating call;
+  a foreground caller abort still cancels its registered run.
 - `output_schema` asks the child for a fenced `json:result` block. An otherwise successful invalid answer gets one repair round; a failed provider attempt neither repairs nor publishes structured output.
 - `context: "fork"` continues from a fork of the parent session.
 - Do not poll `status` in a tight loop. Use `wait` / `subagent_wait`, or let the
-  completion notification arrive for `async: true` runs.
+  completion notification arrive for `async: true` runs. If routing or setup
+  fails, the same run id remains collectable; do not start a duplicate request
+  merely because the initiating call stopped waiting.
 - Point the user at `/subagents` for the live inspector and `/subagent-cost` for
   the root / subagent / routing / combined ledger. Routing cost is reported as
   unreported (tokens only, no currency).

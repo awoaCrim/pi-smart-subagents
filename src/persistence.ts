@@ -137,8 +137,8 @@ export function normalizeRoutingReceipt(value: unknown): RoutingReceipt | undefi
 /**
  * Bounded decode of the routing metadata attached to a task result. Requires the full
  * `RoutingDecision` core (`decisionId`/`purpose`/`selectedModel`/`selectorModel`/
- * `selectedTools`) plus the locally added `mandatoryTools` list. Anything malformed,
- * partial or oversized returns `undefined` so old/legacy snapshots stay readable.
+ * `selectedTools`). Anything malformed, partial or oversized returns `undefined` so
+ * old/legacy snapshots stay readable; unknown legacy fields are ignored.
  */
 export function normalizeTaskRouting(value: unknown): TaskRouting | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -149,8 +149,7 @@ export function normalizeTaskRouting(value: unknown): TaskRouting | undefined {
   const selectedModel = routingString(r.selectedModel, MAX_ROUTING_MODEL_LENGTH);
   const selectorModel = routingString(r.selectorModel, MAX_ROUTING_VERSION_LENGTH);
   const selectedTools = routingStringArray(r.selectedTools);
-  const mandatoryTools = routingStringArray(r.mandatoryTools);
-  if (!decisionId || !purpose || !selectedModel || !selectorModel || !selectedTools || !mandatoryTools) return undefined;
+  if (!decisionId || !purpose || !selectedModel || !selectorModel || !selectedTools) return undefined;
 
   const taskIndex = routingNonNegativeInt(r.taskIndex);
   const confidence = routingNonNegativeNumber(r.confidence);
@@ -194,7 +193,6 @@ export function normalizeTaskRouting(value: unknown): TaskRouting | undefined {
     selectorVersions: selectorVersions ?? (selectorVersion ? Object.freeze([selectorVersion]) : Object.freeze([])),
     latencyMs: latencyMs ?? 0,
     receiptIds: receiptIds ?? Object.freeze([]),
-    mandatoryTools,
     outcome: "success" as const,
   });
 }
@@ -356,7 +354,6 @@ export interface PersistenceAdapter {
 }
 
 export interface PersistedResult {
-  backend?: import("./types.js").BackendName;
   label: string;
   task: string;
   state: RunState;
@@ -429,7 +426,7 @@ function isRunState(value: unknown): value is RunState {
 }
 
 function isTimeoutPhase(value: unknown): value is TimeoutPhase {
-  return ["queued", "starting", "running", "cancelling"].includes(String(value));
+  return ["routing", "queued", "starting", "running", "cancelling"].includes(String(value));
 }
 
 function normalizeProcess(value: unknown): ChildProcessIdentity | undefined {

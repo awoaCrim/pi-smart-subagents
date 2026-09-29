@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.11.4 — 2026-09-29
+
+### Durable pre-routing timeout evidence
+
+- Register real dispatches before local preflight and Jev selection, link selector receipts to the same run id, and terminalize routing/setup failures without launching a duplicate child.
+- Distinguish pre-spawn `timeout (routing)` from child timeout phases across status, inline output, completion notifications and `/subagents`, while preserving interruptible non-cancelling waits and foreground cancellation semantics.
+
+### Pi-only child runtime
+
+- Remove selectable Codex and Claude child adapters, vendor transcript resolution, and backend-specific host-tool coupling so extension-managed children use Pi's Pi RPC runtime only.
+- Keep backend capability validation, routed tool restrictions, timeout evidence and public dispatch documentation aligned with the single supported child runtime, without retaining dead vendor-specific paths.
+
+## 0.11.3 — 2026-09-27
 
 ### Configurable Jev routing destination
 
@@ -178,58 +190,6 @@ concurrency race guard.
 - The Pi extension manifest remains `./extensions/subagent.ts` and is unchanged.
 - Deep `src/*` package imports are intentionally no longer public once this
   export map ships.
-
-## 0.6.0
-
-### Multi-backend children: pi, Codex, Claude Code
-
-`backend: "pi" | "codex" | "claude"` on any task, parallel item, or agent
-frontmatter. Children run on the vendor CLI as a child process, so **every
-existing safety guarantee still applies** — git worktree isolation, machine-wide
-process locks, nesting-depth limits, orphan reclaim, PID-identity group kill —
-and **no new dependencies** are added. (The reference implementation this was
-adapted from embeds `@anthropic-ai/claude-agent-sdk` in-process; the `claude`
-CLI exposes everything needed without that weight.)
-
-Internally this is a new `BackendAdapter` seam (`src/backend.ts`,
-`src/backends/`). `ChildRunner` keeps all the backend-agnostic machinery;
-adapters own only invocation building, event-stream parsing, the stdin command
-dialect, and a capability record. The `pi` backend is a verbatim extraction of
-the previous inline logic.
-
-**Capabilities are enforced, not assumed.** Requests a backend cannot honor are
-refused at validation time with an explanation, because silently dropping a
-budget or a read-only guarantee turns a safety feature into a no-op:
-
-|                                  | pi                | codex                               | claude                 |
-| -------------------------------- | ----------------- | ----------------------------------- | ---------------------- |
-| `max_cost`                       | ✅                | ❌ refused (tokens only, no cost)   | ✅ `total_cost_usd`    |
-| read-only profile                | ✅ tool allowlist | ✅ `--sandbox read-only` (OS-level) | ✅ `--allowedTools`    |
-| steering / graceful wrap-up      | ✅                | ❌ no stdin channel                 | ❌ one-shot print mode |
-| `resume`                         | ✅                | ✅                                  | ✅                     |
-| `context:'fork'` / `fork_resume` | ✅                | ❌ refused                          | ✅ `--fork-session`    |
-| `thinking`                       | ✅                | ❌                                  | ❌                     |
-| `output_schema`                  | ✅                | ✅ `--output-schema`                | ✅ `--json-schema`     |
-
-Parsers were written against event streams captured verbatim from the real
-CLIs (codex-cli 0.144.6, claude-code 2.1.219) and are fixture-tested including
-truncated-stream, API-error and rate-limit paths.
-
-### Live transcript for every backend
-
-Pressing `t` on a running run in `/subagents` previously assumed pi's session
-layout and entry schema, so codex/claude runs showed "waiting for child
-session…" forever. Vendor transcripts are now located by session id and
-rendered through per-backend renderers, with each vendor's boilerplate
-(codex's sandbox preamble, claude's queue bookkeeping) filtered out.
-
-Tests: 277 → 308.
-
-**Verified live:** codex end-to-end through the runner; the `max_cost` refusal
-message; codex's read-only sandbox blocking a shell write with "operation not
-permitted"; and both vendor transcripts tailing real on-disk session files.
-Claude's happy path is fixture-tested only — the development account was
-rate-limited during this work.
 
 ## 0.5.1
 

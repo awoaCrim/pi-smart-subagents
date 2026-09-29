@@ -305,7 +305,7 @@ function routingSummary(config: JevRoutingConfig): string[] {
     `Selector: ${config.selectorModel} (pin an exact version instead of the moving alias to make selection reproducible).`,
     "Credential: jevRouting.apiKey in the private ~/.pi/subagent.json config file. Never read or copy its value into prompts, logs or results; the routing transport uses it only for the Authorization header.",
     `Logical selection deadline: ${config.timeoutMs} ms, covering all selector requests and waiting for one invocation.`,
-    "Only Pi-backed new dispatch is supported; native Codex/Claude new dispatches are rejected rather than routed.",
+    "All new dispatch uses the Pi child runtime; Jev selects only the configured model and ordinary tool candidates.",
     "Candidate models (exact IDs; the user's per-model characteristics are the matching criteria):",
   ];
   const listed = config.models.slice(0, MAX_GUIDANCE_MODEL_LINES);

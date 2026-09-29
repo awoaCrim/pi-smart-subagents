@@ -321,7 +321,7 @@ this package (GitHub Release + npm via OIDC with provenance).
 **Re-planning triggers** — revisit this plan (not just execute it) if:
 - Pi upstream ships native subagent/task support (re-evaluate overlap),
 - the RPC protocol changes shape (runner assumptions in 2.1/4.1),
-- Claude Code's agent-teams stabilizes AND user demand for inter-agent
-  messaging materializes (deferred item in ROADMAP.md),
+- vendor agent-teams stabilize AND user demand for inter-agent messaging
+  materializes (deferred item in ROADMAP.md),
 - `@parke.dev/pi-subagent` adoption surfaces a failure mode not covered by
   phases 3–4 (reliability reports take priority over planned work).
