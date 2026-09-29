@@ -252,7 +252,7 @@ export function formatStatusPreview(snapshot: RunSnapshot, now = Date.now()): st
   const done = snapshot.delivered ? 'delivered' : snapshot.resumeBlocked ? 'blocked' : 'ready';
   const elapsed = formatElapsed(snapshot.startedAt, snapshot.endedAt ?? now);
   const phase = snapshot.results.find((r) => r.timeoutPhase)?.timeoutPhase;
-  const phaseTag = snapshot.state === 'timeout' && phase ? `/${phase}` : '';
+  const phaseTag = snapshot.state === 'timeout' && phase ? ` (${phase})` : '';
   // Reliability flags from task results (attempt count, stall watchdog).
   let maxAttempts = 0;
   let stalledSince: number | undefined;
@@ -364,6 +364,170 @@ function pickLine(text: string | undefined, which: 'first' | 'last'): string | u
   return which === 'last' ? lines[lines.length - 1] : lines[0];
 }
 
+export type TaskDiagnosticKind = 'summary' | 'error' | 'timeout' | 'cancelled' | 'warning';
+
+export interface TaskDiagnosticInput {
+  label?: string;
+  state?: RunState;
+  stopReason?: string;
+  timeoutPhase?: TimeoutPhase;
+  errorMessage?: string;
+  finalOutput?: string;
+  wrappedUp?: boolean;
+  stalledSince?: number;
+}
+
+export interface TaskDiagnostic {
+  kind: TaskDiagnosticKind;
+  tone: ThemeColor;
+  /** ANSI-free bounded source text shared by compact and expanded surfaces. */
+  text: string;
+}
+
+const MAX_DIAGNOSTIC_BYTES = 4_096;
+
+function boundedDiagnosticText(value: unknown, maxBytes = MAX_DIAGNOSTIC_BYTES): string {
+  const raw = String(value ?? '').trim();
+  const limit = Math.max(1, Math.floor(maxBytes));
+  if (!raw) return '';
+  if (Buffer.byteLength(raw, 'utf8') <= limit) return raw;
+  const suffix = '…';
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8');
+  if (limit <= suffixBytes) return utf8SafePrefix(raw, limit);
+  return `${utf8SafePrefix(raw, limit - suffixBytes)}${suffix}`;
+}
+
+function firstMeaningfulText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** Pure semantic outcome projection shared by every TUI surface. */
+export function taskDiagnostic(task: TaskDiagnosticInput, maxBytes = MAX_DIAGNOSTIC_BYTES): TaskDiagnostic | undefined {
+  switch (task.state) {
+    case 'failed':
+    case 'lost':
+      return {
+        kind: 'error',
+        tone: 'error',
+        text: boundedDiagnosticText(
+          firstMeaningfulText(task.errorMessage, task.stopReason, pickLine(task.finalOutput, 'first')) ?? 'unknown error',
+          maxBytes,
+        ) || 'unknown error',
+      };
+    case 'timeout':
+      return {
+        kind: 'timeout',
+        tone: 'warning',
+        text: `timeout${task.timeoutPhase ? ` (${task.timeoutPhase})` : ''}`,
+      };
+    case 'cancelled':
+      return { kind: 'cancelled', tone: 'muted', text: 'cancelled' };
+    case 'partial': {
+      if (task.wrappedUp) {
+        const first = pickLine(task.finalOutput, 'first');
+        const reason = firstMeaningfulText(task.stopReason) ?? 'budget';
+        return {
+          kind: 'warning',
+          tone: 'warning',
+          text: `wrapped up (${reason.replace(/_/g, ' ')})${first ? ` — ${boundedDiagnosticText(first, 512)}` : ''}`,
+        };
+      }
+      if (task.stopReason === 'stalled') {
+        return {
+          kind: 'warning',
+          tone: 'warning',
+          text: `stalled — ${boundedDiagnosticText(firstMeaningfulText(task.errorMessage) ?? 'no activity', maxBytes) || 'no activity'}`,
+        };
+      }
+      const stopText = firstMeaningfulText(task.errorMessage);
+      if (stopText) {
+        return {
+          kind: 'warning',
+          tone: 'warning',
+          text: `stopped — ${boundedDiagnosticText(stopText, maxBytes)}`,
+        };
+      }
+      const reason = firstMeaningfulText(task.stopReason);
+      if (reason) {
+        return {
+          kind: 'warning',
+          tone: 'warning',
+          text: `stopped (${reason.replace(/_/g, ' ')})`,
+        };
+      }
+      break;
+    }
+  }
+  const first = pickLine(task.finalOutput, 'first');
+  return first ? { kind: 'summary', tone: 'toolOutput', text: boundedDiagnosticText(first, maxBytes) } : undefined;
+}
+
+/** Canonical task line used by compact renderers and notification text. */
+export function formatTaskDiagnostic(task: TaskDiagnosticInput, maxBytes = MAX_DIAGNOSTIC_BYTES): string | undefined {
+  const diagnostic = taskDiagnostic(task, maxBytes);
+  if (!diagnostic) return undefined;
+  if (diagnostic.kind === 'error') {
+    const state = task.state === 'lost' ? 'lost' : 'failed';
+    return `${state} — ${diagnostic.text}`;
+  }
+  return diagnostic.text;
+}
+
+/** ANSI-free compact form of the canonical task diagnostic. */
+export function compactTaskDiagnostic(task: TaskDiagnosticInput, max = 120): string | undefined {
+  const text = formatTaskDiagnostic(task);
+  return text ? oneLine(text, max) : undefined;
+}
+
+export interface RunDiagnosticInput {
+  mode?: RunMode;
+  state: RunState;
+  summary?: string;
+  results: readonly TaskDiagnosticInput[];
+}
+
+/** Bounded run-level diagnostic for terminal/footer notifications. */
+export function formatRunDiagnostic(run: RunDiagnosticInput, max = 180): string | undefined {
+  const entries = run.results.map((task, index) => ({
+    task,
+    index,
+    diagnostic: taskDiagnostic(task),
+  })).filter((entry): entry is typeof entry & { diagnostic: TaskDiagnostic } => !!entry.diagnostic);
+  const actionable = entries.filter((entry) => entry.diagnostic.kind !== 'summary');
+  const selected = actionable.length ? actionable : entries;
+  const state = formatState(run.state);
+
+  if (run.state === 'completed') {
+    const summary = boundedDiagnosticText(firstMeaningfulText(selected[0]?.diagnostic.text, run.summary), max);
+    return summary ? `${state} — ${oneLine(summary, Math.max(1, max - state.length - 3))}` : state;
+  }
+  if (run.state === 'timeout') {
+    return selected.find((entry) => entry.diagnostic.kind === 'timeout')?.diagnostic.text ?? state;
+  }
+  if (run.state === 'cancelled') return state;
+
+  if (!selected.length) {
+    const summary = boundedDiagnosticText(run.summary, max);
+    return summary ? `${state} — ${oneLine(summary, Math.max(1, max - state.length - 3))}` : state;
+  }
+  const parallel = run.mode === 'parallel' || selected.length > 1;
+  const details = selected.slice(0, 3).map((entry) => {
+    if (entry.diagnostic.kind === 'error') {
+      const text = formatTaskDiagnostic(entry.task) ?? entry.diagnostic.text;
+      return parallel
+        ? `${entry.task.label ?? `task-${entry.index + 1}`}: ${text}`
+        : `${state} — ${entry.diagnostic.text}`;
+    }
+    const text = formatTaskDiagnostic(entry.task) ?? entry.diagnostic.text;
+    return parallel ? `${entry.task.label ?? `task-${entry.index + 1}`}: ${text}` : text;
+  }).join('; ');
+  const prefix = state === 'done' || state === 'failed' || state === 'lost' ? '' : `${state} — `;
+  return oneLine(`${prefix}${details}`, max);
+}
+
 /** One-line collapsed call header: `subagent <preview>`. */
 export function renderCallLine(args: any, theme: Theme, width: number): string {
   const title = theme.fg('toolTitle', theme.bold('subagent'));
@@ -389,31 +553,10 @@ function wrapLines(text: string, width: number): string[] {
 
 type ThemeColor = Parameters<Theme['fg']>[0];
 
-function terminalTaskLine(theme: Theme, task: InlineTaskView): { text: string; color: ThemeColor } | undefined {
-  switch (task.state) {
-    case 'failed':
-    case 'lost':
-      return { text: `${formatState(task.state)} — ${oneLine(task.errorMessage ?? task.stopReason ?? 'unknown error')}`, color: 'error' };
-    case 'cancelled':
-      return { text: 'cancelled', color: 'muted' };
-    case 'timeout':
-      return { text: `timed out${task.timeoutPhase ? ` (${task.timeoutPhase})` : ''}`, color: 'warning' };
-    case 'partial': {
-      if (task.wrappedUp) {
-        const first = pickLine(task.finalOutput, 'first');
-        return { text: `wrapped up (${(task.stopReason ?? 'budget').replace('_', ' ')})${first ? ` — ${oneLine(first, 80)}` : ''}`, color: 'warning' };
-      }
-      if (task.stopReason === 'stalled') {
-        return { text: `stalled — ${oneLine(task.errorMessage ?? 'no activity', 80)}`, color: 'warning' };
-      }
-      const first = pickLine(task.finalOutput, 'first');
-      return first ? { text: oneLine(first), color: 'toolOutput' } : undefined;
-    }
-    default: {
-      const first = pickLine(task.finalOutput, 'first');
-      return first ? { text: oneLine(first), color: 'toolOutput' } : undefined;
-    }
-  }
+function terminalTaskLine(_theme: Theme, task: InlineTaskView): { text: string; color: ThemeColor } | undefined {
+  const diagnostic = taskDiagnostic(task);
+  const text = formatTaskDiagnostic(task);
+  return diagnostic && text ? { text, color: diagnostic.tone } : undefined;
 }
 
 function pointerText(task: InlineTaskView, expanded: boolean): string | undefined {
@@ -469,21 +612,13 @@ export function renderRunLines(run: InlineRunView, opts: InlineRenderOptions): s
       const active = isActiveState(task.state);
       // The state glyph already communicates the outcome; parallel rows show
       // just the message/preview without repeating the state word.
-      const tail = active
-        ? pickLine(task.finalOutput, 'last')
-        : ['failed', 'lost'].includes(task.state ?? '')
-          ? (task.errorMessage ?? task.stopReason ?? formatState(task.state!))
-          : task.state === 'timeout'
-            ? `timed out${task.timeoutPhase ? ` (${task.timeoutPhase})` : ''}`
-            : task.state === 'cancelled'
-              ? undefined
-              : pickLine(task.finalOutput, 'first');
-      const tailColor: ThemeColor = !active && ['failed', 'lost'].includes(task.state ?? '') ? 'error' : 'muted';
+      const diagnostic = taskDiagnostic(task);
+      const tail = active ? pickLine(task.finalOutput, 'last') : formatTaskDiagnostic(task);
+      const tailColor: ThemeColor = active ? 'muted' : (diagnostic?.tone ?? 'muted');
       let line = `  ${glyph} ${theme.fg('dim', task.model ?? 'model unknown')} · ${theme.fg('text', task.label ?? 'task')}`;
       if (mini) line += theme.fg('dim', ` · ${mini}`);
       const notes = taskAnnotations(task, now);
       if (notes.length) line += ` ${theme.fg('warning', `[${notes.join(' · ')}]`)}`;
-      if (task.wrappedUp && !active) line += ` ${theme.fg('warning', '◐ wrapped up')}`;
       if (tail) line += ` ${theme.fg(tailColor, `— ${oneLine(tail, 80)}`)}`;
       lines.push(line);
       if (opts.expanded) {

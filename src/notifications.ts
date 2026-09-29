@@ -76,6 +76,8 @@ export interface CompletionDetailsTask {
   label: string;
   state: string;
   timeoutPhase?: TimeoutPhase;
+  /** Canonical bounded outcome line; old messages may omit it and use preview. */
+  diagnostic?: string;
   preview: string;
   turns: number;
   tokens: number;
