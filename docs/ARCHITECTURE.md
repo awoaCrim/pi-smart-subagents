@@ -18,7 +18,9 @@
   from a real branched copy of the parent conversation. Fail-fast when the parent
   session is not persisted; single-task only.
 - `registry.ts`: one parent-session runtime, run state, snapshots, resume locks, and the
-  single LiveRun→snapshot/persisted-result projections used by every consumer.
+  single LiveRun→snapshot/persisted-result projections used by every consumer. Real
+  dispatches register a queued run before local preflight/selection, so routing and
+  pre-spawn failures retain one discoverable, receipt-linked terminal record.
 - `semaphore.ts`: per-parent-runtime child-process limit.
 - `process-lock.ts`: machine-wide durable coordination under `~/.pi/subagent-locks/` —
   exclusive per-child-session resume locks, global concurrency slots, and run process
@@ -30,7 +32,7 @@
 - `maintenance.ts`: filesystem GC (session files) and abort-race helpers; kept out of persistence.
 - `usage.ts`: provider-reported root/subagent/combined accounting, plus a separate
   once-per-request routing-token category whose currency is reported as unreported.
-- `policy.ts` / `schema.ts`: discriminated request validation and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Pi context-management control-plane tools remain available to child allowlists without granting project-file write access.
+- `policy.ts` / `schema.ts`: discriminated request validation and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized ordinary tool allowlists are passed to Pi without hidden additions; profile checks still prevent project-file writes in read-only modes.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
   shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
@@ -93,8 +95,10 @@ Invariants:
 14. Budget stops (`max_turns`/`max_cost`) with at least one completed turn end as `partial`
     and deliver their output normally. Streams truncated after useful assistant output also
     end as `partial`. Timeouts report `state: "timeout"` with `timeoutPhase`.
-15. `timeout_ms` covers the whole task, including semaphore queue time, but the phase
-    (queued / starting / running) is recorded so agents can apply the right retry policy.
+15. `timeout_ms` covers the whole task, including local preflight, Jev routing, setup,
+    semaphore queue time and child execution. The phase (`routing` / `queued` / `starting` /
+    `running` / `cancelling`) is recorded so agents can distinguish pre-spawn evidence from
+    child timeout behavior and apply the right retry policy.
 16. Worktrees live under a durable root (`~/.pi/subagent-worktrees`), never a purgeable OS
     tmpdir. Startup maintenance (top-level parents only) prunes stale git registrations,
     removes unchanged leftovers, and sweeps changed-but-expired worktrees. Live-run
@@ -107,7 +111,7 @@ Invariants:
 18. Protocol completion prefers Pi's `agent_settled` event. Legacy Pi `agent_end` without
     `willRetry` is accepted as an explicit fallback for older RPC hosts; `agent_end` with
     `willRetry: true` is treated as non-terminal, and modern `willRetry: false` waits for
-    `agent_settled`. Codex/Claude parser-generated `agent_end` markers are not this fallback.
+    `agent_settled`.
 19. Depth and spawn-policy parsing fail closed on malformed values: env scrubbing cannot
     silently reset the depth counter to top-level, and a malformed `PI_SUBAGENT_SPAWNS`
     disables spawning rather than unrestricting it.
@@ -138,7 +142,9 @@ Invariants:
 28. `action: "plan"` is a truth oracle: it runs the exact validation, Jev selection and
     local preflights of a real spawn and returns the resolved plan and its selector usage
     without spawning. It creates no registry entry, and its fee-bearing selection is not
-    cached for a later dispatch.
+    cached for a later dispatch. A real dispatch creates its registry entry before those
+    paid/pre-spawn phases, and a failure terminalizes that same entry without launching a
+    duplicate child.
 29. Every new extension-managed invocation (`task`/`tasks[]`, `action:"plan"`, `/btw`,
     resume, fork, nested dispatch and the optional synthesis child) crosses one selector
     interface before any child starts. The dedicated candidate list intersected with locally available models is the only source of execution models. One validated full probability ranking belongs to the invocation, and fallback reuses it without another selection. The original selectedModel/confidence remain immutable; result.model reports the actual attempt. The full locally permitted tool catalog is the only tool candidate source, and one model-independent selection is shared by every attempt. Legacy `model`/`fallback_models`

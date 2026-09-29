@@ -6,8 +6,8 @@
  * without pulling in config, policy, registry or process code. Only Node builtins and the
  * leaf `thinking.ts` helper may be used by dependants.
  *
- * Everything here describes the *selector boundary*. Local permission enforcement, profile
- * filtering and mandatory Pi control-plane tools stay in `src/policy.ts` and the caller.
+ * Everything here describes the *selector boundary*. Local permission enforcement and profile
+ * filtering stay in `src/policy.ts` and the caller.
  */
 
 import type { TaskDifficulty } from "./types.js";
@@ -123,8 +123,8 @@ export interface RankedModelOption {
 }
 
 /**
- * A tool offered to the selector. The caller must have already removed mandatory local
- * additions (Pi control-plane tools) — those are never Jev questions.
+ * A tool offered to the selector. The caller has already applied local availability and
+ * profile filtering; the selector sees only ordinary candidates it may choose.
  */
 export interface RoutingToolCandidate {
   readonly name: string;
@@ -153,7 +153,7 @@ export interface RoutingSelectInput {
   readonly task: string;
   /** Locally eligible candidate models, preserving the user's configured order. */
   readonly models: readonly RoutingModelCandidate[];
-  /** Eligible non-mandatory tools; an empty/absent list means a model-only question. */
+  /** Eligible ordinary tools; an empty/absent list means a model-only question. */
   readonly tools?: readonly RoutingToolCandidate[];
   readonly constraints?: RoutingConstraints;
 }
@@ -193,9 +193,8 @@ export interface RoutingReceipt {
 }
 
 /**
- * A validated selection. `selectedTools` is the Jev-chosen subset only; the caller still
- * applies local capability validation, adds mandatory Pi control-plane tools and recomputes
- * writer capability.
+ * A validated selection. `selectedTools` is the Jev-chosen subset; the caller still
+ * applies local capability validation and recomputes writer capability.
  */
 export interface RoutingDecision {
   /** Unique logical decision ID, separate from every receipt/request ID. */

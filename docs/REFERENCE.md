@@ -84,7 +84,7 @@ Or pass this request to `subagent_wait`, which delegates to the same collection 
 { "id": "<run-id>", "timeout_ms": 30000 }
 ```
 
-An interrupted or timed-out wait does not cancel or consume a still-running task. Cancel it explicitly when needed:
+An interrupted or timed-out wait does not cancel or consume a still-running task. A real foreground dispatch is registered before local preflight and Jev selection, so a routing/setup timeout or failure remains visible under its run id; use `async: true` when the work must outlive the initiating call. Cancel it explicitly when needed:
 
 ```json
 { "action": "cancel", "id": "<run-id>" }
@@ -164,7 +164,7 @@ Both operations select again. To guide an existing child instead, steer it; para
 
 #### Budgets and retries
 
-A budget breach requests a final answer and allows the configured grace turns. Before any tool starts, a recognized model-availability failure can advance to the next candidate in Jev probability order. All attempts share the selected tools, task deadline and cumulative execution budgets. Switching does not call Jev again.
+A budget breach requests a final answer and allows the configured grace turns. `timeout_ms` is the absolute task deadline across local preflight, Jev routing, setup, queueing and child execution; status and terminal output distinguish a pre-spawn `timeout (routing)` from child `queued`, `starting`, `running` or `cancelling` timeout. Before any tool starts, a recognized model-availability failure can advance to the next candidate in Jev probability order. All attempts share the selected tools, task deadline and cumulative execution budgets. Switching does not call Jev again.
 
 `max_retries` is the total number of extra child attempts: `0` permits the initial attempt only, `1` permits at most two attempts, and `2` permits at most three. The built-in default is `1`; task, agent, profile and configuration overrides still apply. The list never wraps back to an earlier candidate. Pi's own in-process/provider retries are separate and unchanged, so a child can make multiple provider requests before the extension sees its final failure. See [ranked failover](#probability-ranked-failover) for the failure boundary.
 
@@ -225,33 +225,17 @@ Or open the question prompt:
 
 ---
 
-### Backends
+### Execution runtime
 
-Jev routing manages Pi-backed new dispatch only. A `backend: "codex"` or `backend: "claude"` new task is refused before any selector or provider work, including a backend inherited from agent frontmatter; the extension never silently switches it to Pi. Existing Codex/Claude runs stay manageable: `status`, `wait`, `cancel`, `steer`, `diff`, `apply` and `discard` all still work. Provider diversity is not lost, because another provider's execution model stays eligible through Pi once it is in your configured candidate list.
+All extension-managed children run through Pi's RPC runtime. Jev selects the
+execution model and ordinary locally permitted tools, while the extension keeps
+worktree isolation, process locks, depth limits, budgets, startup verification,
+steering, resume/fork, and structured-output guarantees in one Pi path.
 
-The following new-work request is refused; use the Pi-backed path instead:
-
-```json
-{ "task": "Summarize this module", "backend": "codex", "profile": "explore" }
-```
-
-The low-level SDK is a different contract: `runTasks`/`runSubagent` execute the explicit `TaskSpec` you hand them, so embedding code can still select a backend directly. Everything else (worktrees, process locks, depth limits, budgets, orphan reclaim) is backend-agnostic and applies unchanged.
-
-Capabilities differ, and **unsupported combinations are refused with an explanation rather than silently ignored**: a dropped `max_cost` or unenforced read-only profile would be a safety regression, not a minor degradation.
-
-|                                 | `pi` (default) | `codex`                               | `claude`               |
-| ------------------------------- | -------------- | ------------------------------------- | ---------------------- |
-| `max_cost`                      | yes            | **refused** (reports tokens, no cost) | yes (`total_cost_usd`) |
-| read-only profile               | tool allowlist | `--sandbox read-only` (OS-level)      | `--allowedTools`       |
-| steering / graceful wrap-up     | yes            | **no** (no stdin channel)             | **no** (one-shot)      |
-| `resume`                        | yes            | yes                                   | yes                    |
-| `context:'fork'`, `fork_resume` | yes            | **refused**                           | yes                    |
-| `thinking`                      | yes            | no                                    | no                     |
-| `output_schema`                 | yes            | yes                                   | yes                    |
-
-A budget breach on a backend without steering hard-stops instead of asking the child to wrap up. Codex's read-only sandbox is enforced by the OS, which is stronger than a tool allowlist.
-
-Agent frontmatter `backend:` remains a default. New extension-managed work rejects any effective backend other than Pi, including a native backend inherited from an agent. Direct SDK specs retain the backend capabilities listed above.
+The low-level SDK and the Pi extension share this same child runtime contract;
+there is no second execution runtime or implicit tool augmentation in the task
+schema. Unsupported capability combinations are refused rather than silently
+ignored.
 
 ---
 
@@ -259,13 +243,11 @@ Agent frontmatter `backend:` remains a default. New extension-managed work rejec
 
 | Profile                      | Tools                                                   | Writes                                      |
 | ---------------------------- | ------------------------------------------------------- | ------------------------------------------- |
-| `explore` (parallel default) | Jev-selected subset of locally permitted read-only candidates + available Pi context tools | no project-file writes |
+| `explore` (parallel default) | Jev-selected subset of locally permitted read-only candidates | no project-file writes |
 | `review`                     | same as explore                                         | no project-file writes                      |
-| `general`                    | Jev chooses from the full available locally permitted catalog + Pi context tools | yes for selected write-capable tools; unknown custom tools count as writable |
+| `general`                    | Jev chooses from the full available locally permitted catalog | yes for selected write-capable tools; unknown custom tools count as writable |
 
 Jev chooses individual tool names, not a capability bundle. Candidates come from the full available locally permitted catalog, not from the agent file's `tools` defaults and not from the parent's currently active tools. An explicit task `tools` list is a ceiling, and explore/review keep their read-only rule regardless of what the selector returns. An empty selection never means "all tools".
-
-For the Pi backend, the context-management tools `new_context`, `get_context_remaining`, `history`, and `notes` are added locally when the parent exposes them, so they are never a selector question. They are control-plane tools: they may update continuity notes or the remote context window, but cannot modify the child checkout or run a shell command. This exception also applies when a task supplies a narrower tool list, so Pi's `contextManagement` remains usable for configured gateway models. Locally added controls are reported in the route metadata.
 
 The finalized tool set is passed to the child as Pi's `--tools` allowlist (`--no-tools` for a true empty set). Pi 0.86.0 is the verified baseline for built-in, extension and late-registered tool enforcement; a host that cannot honor that allowlist is refused rather than silently weakened, and the extension does not claim identical behavior on untested older releases. Before the real task prompt is sent, the child is also asked to confirm the selected model and the finalized tool names through a verified private startup command; if the host cannot verify that command or the child cannot confirm both, the launch aborts with a startup diagnostic instead of running with a broader tool set.
 

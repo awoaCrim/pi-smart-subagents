@@ -8,19 +8,16 @@ and can use tools according to their capability profile.
 
 | Profile | Finalized tools | Writes? |
 |---------|-----------------|---------|
-| `explore` | Jev-chosen subset of locally permitted read-only candidates, plus available Pi context tools | No project-file writes |
+| `explore` | Jev-chosen subset of locally permitted read-only candidates | No project-file writes |
 | `review` | Same as explore | No project-file writes |
-| `general` | Jev-chosen subset of the full available locally permitted catalog, plus available Pi context tools | Yes if write-capable tools are selected |
+| `general` | Jev-chosen subset of the full available locally permitted catalog | Yes if write-capable tools are selected |
 
 Parallel mode defaults to `explore` to avoid concurrent shared writes.
 
 ## Hard rules
 
 1. **Read-only means no project-file mutation.** `bash` can rewrite the disk and is never part of
-   an explore/review profile. Pi context-management tools (`new_context`,
-   `get_context_remaining`, `history`, `notes`) are an explicit control-plane
-   exception: they may update continuity notes/window state but cannot access
-   the project write tools. The finalized tools reach the child as Pi's `--tools`
+   an explore/review profile. The finalized tools reach the child as Pi's `--tools`
    allowlist (`--no-tools` when empty), and the selector's answer is re-validated
    locally: unknown, unavailable or unsafe choices cannot launch broader
    capability, and an empty selection never becomes "all tools". Pi 0.86.0 is the
@@ -86,11 +83,6 @@ Version `0.10.0` reads the TypeSafe credential from `jevRouting.apiKey` in the p
 The transport sends the key only as an `Authorization` header to the normalized per-invocation `jevRouting.baseUrl` destination, with `redirect: "error"`. When the field is omitted, the exact official HTTPS endpoint remains the default. A configured destination must be a complete absolute HTTPS URL with a hostname, at most 2048 characters, and no username/password, query, fragment, whitespace or control characters; HTTP and other schemes are rejected before any selector request. A custom destination intentionally changes which service receives the minimal task/model/tool routing disclosure, so it must be trusted accordingly. The URL is configuration-only and is not copied into prompts, selector JSON bodies, argv, child manifests, logs, receipts or results. The key itself is never copied into prompts, selector JSON bodies, argv, child manifests, logs, receipts or results. Never serialize or log the complete routing configuration. Rotate any credential pasted into a transcript or shared in conversation.
 
 Published npm `0.9.0` uses the older environment-based mechanism. In `0.10.0`, `apiKeyEnv` is rejected with manual migration guidance and no environment fallback. Unrelated `PI_SUBAGENT_*` runtime settings remain supported.
-
-New extension-managed dispatch is Pi-only. A `backend: "codex"` or
-`backend: "claude"` new task is rejected before any selector or provider work,
-including a backend inherited from agent frontmatter, rather than silently
-switched to Pi. Existing native-backend runs stay manageable.
 
 ## Trust and project cwd
 

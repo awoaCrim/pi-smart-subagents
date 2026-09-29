@@ -11,6 +11,8 @@
  * flush immediately, carrying any held successes with them.
  */
 
+import type { TimeoutPhase } from "./types.js";
+
 export interface CompletionBatcherOptions {
   /** Quiet window after the most recent completion before flushing. */
   debounceMs?: number;
@@ -73,6 +75,7 @@ export class CompletionBatcher {
 export interface CompletionDetailsTask {
   label: string;
   state: string;
+  timeoutPhase?: TimeoutPhase;
   preview: string;
   turns: number;
   tokens: number;

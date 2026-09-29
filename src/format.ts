@@ -78,7 +78,6 @@ export interface RoutingLineInput {
   selectorModel?: string;
   selectorVersion?: string;
   selectedTools?: readonly string[];
-  mandatoryTools?: readonly string[];
   confidence?: number;
   latencyMs?: number;
   outcome?: string;
@@ -171,7 +170,7 @@ function summarizeRoutingTools(tools: readonly string[]): string {
 
 /**
  * One minimal route line for existing expanded surfaces: selected model, selector
- * version, chosen tools, locally added mandatory controls, outcome and latency.
+ * version, chosen tools, outcome and latency.
  * ANSI-free and capped so the caller's `truncateToWidth` stays authoritative.
  */
 export function formatRouteLine(routing?: RoutingLineInput, max = 160): string | undefined {
@@ -186,7 +185,6 @@ export function formatRouteLine(routing?: RoutingLineInput, max = 160): string |
   const selectorModel = str(routing.selectorModel);
   const selectorVersion = str(routing.selectorVersion);
   const selectedTools = list(routing.selectedTools);
-  const mandatoryTools = list(routing.mandatoryTools);
   const outcome = str(routing.outcome);
   const code = str(routing.code);
   const confidence = typeof routing.confidence === 'number' && Number.isFinite(routing.confidence) ? routing.confidence : undefined;
@@ -194,7 +192,7 @@ export function formatRouteLine(routing?: RoutingLineInput, max = 160): string |
 
   const meaningful = !!(selectedModel || selectorModel || selectorVersion || outcome)
     || confidence !== undefined || latencyMs !== undefined
-    || selectedTools !== undefined || mandatoryTools !== undefined;
+    || selectedTools !== undefined;
   if (!meaningful) return undefined;
 
   const parts: string[] = [];
@@ -208,7 +206,6 @@ export function formatRouteLine(routing?: RoutingLineInput, max = 160): string |
   }
   if (confidence !== undefined) parts.push(`conf ${confidence.toFixed(2)}`);
   parts.push(`tools ${selectedTools && selectedTools.length ? summarizeRoutingTools(selectedTools) : 'none'}`);
-  if (mandatoryTools && mandatoryTools.length) parts.push(`+${summarizeRoutingTools(mandatoryTools)}`);
   if (outcome) parts.push(code ? `${outcome}/${code}` : outcome);
   if (latencyMs !== undefined) parts.push(formatDuration(latencyMs));
   return oneLine(`route ${parts.join(' · ')}`, max);

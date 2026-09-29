@@ -35,7 +35,6 @@ export type {
 export type {
   BackendAdapter,
   BackendCapabilities,
-  BackendName,
 } from "./backend.js";
 
 export {

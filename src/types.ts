@@ -2,13 +2,13 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "./thinking.js";
 import type { RoutingDecision } from "./routing-types.js";
 
-/** Validated selector decision plus mandatory local control-plane tools. */
-export type TaskRouting = RoutingDecision & { readonly mandatoryTools: readonly string[]; readonly outcome: "success" };
+/** Validated Jev selector decision. */
+export type TaskRouting = RoutingDecision & { readonly outcome: "success" };
 
 export type RunMode = "single" | "parallel";
 export type RunState = "queued" | "running" | "completed" | "partial" | "failed" | "cancelled" | "lost" | "timeout";
-/** Distinct timeout phases so agents can retry queue pressure without "fixing" unfinished work. */
-export type TimeoutPhase = "queued" | "starting" | "running" | "cancelling";
+/** Distinct timeout phases so callers can distinguish pre-spawn routing from child queue/execution work. */
+export type TimeoutPhase = "routing" | "queued" | "starting" | "running" | "cancelling";
 export type TaskProfile = "explore" | "review" | "general";
 export type OutputMode = "inline" | "file-only";
 
@@ -54,8 +54,6 @@ export interface UsageStats {
   contextTokens: number;
   turns: number;
 }
-
-export type BackendName = "pi" | "codex" | "claude";
 
 /**
  * Sticky current-invocation tool activity for the pre-tool switch boundary. `started` latches on tool_execution_start, a newly observed
@@ -118,8 +116,6 @@ export interface ModelAttemptRecord {
 }
 
 export interface TaskSpec {
-  /** Agent CLI powering this child. Defaults to "pi". */
-  backend?: BackendName;
   task: string;
   /** Short human label shown in UIs and result indexes. */
   label?: string;
@@ -185,8 +181,6 @@ export interface TaskResult {
   routing?: TaskRouting;
   thinking?: TaskSpec["thinking"];
   profile?: TaskProfile;
-  /** Backend that produced this result (pi | codex | claude). */
-  backend?: BackendName;
   canWrite?: boolean;
   stopReason?: string;
   /** Present when stopReason is a timeout-like outcome. */
@@ -272,7 +266,6 @@ export interface RunSnapshot {
     profile?: TaskProfile;
     canWrite?: boolean;
     outputFile?: string;
-    backend?: BackendName;
     outputMode?: OutputMode;
     worktree?: { cwd: string; branch: string; baseCommit: string; changed: boolean; diffSummary?: string };
     sessionId?: string;
