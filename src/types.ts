@@ -14,9 +14,9 @@ export type OutputMode = "inline" | "file-only";
 
 /**
  * Optional dispatch-author difficulty for Jev routing context. It is a
- * descriptive selector signal only: the local code never maps a level to a
- * fixed model, reorders candidates, changes profile permissions or alters
- * retry/failover behavior.
+ * descriptive selector signal and a small thinking hint only: the local code
+ * never maps a level to a fixed model, reorders candidates, changes profile
+ * permissions or alters retry/failover behavior.
  */
 export type TaskDifficulty = "simple" | "moderate" | "complex";
 
@@ -85,7 +85,8 @@ export type ModelFailureCategory =
  * `policy.ts` from the validated ranking and the original model catalog; never
  * a tool-request/config field and never decoded from a persisted snapshot into
  * an executable plan. Thinking follows explicit > agent > profile > candidate >
- * parent per entry; tools/writer classification are shared across all entries.
+ * difficulty default > parent per entry; tools/writer classification are shared
+ * across all entries.
  */
 export interface ModelAttemptSpec {
   readonly model: string;
@@ -122,12 +123,12 @@ export interface TaskSpec {
   systemPrompt?: string;
   model?: string;
   thinking?: ThinkingLevel;
-  /** Optional difficulty hint forwarded to the selector as descriptive routing context. */
+  /** Optional difficulty hint forwarded to Jev; local policy may derive a thinking default. */
   difficulty?: TaskDifficulty;
   tools?: string[];
-  /** Internal frozen subset: trusted infrastructure must be registered, but may be host-inactive.
-   * Built by local policy, not a tool-call field or persisted executable policy. */
-  passthroughTools?: readonly string[];
+  /** Internal frozen names derived from Pi's official non-direct exposure metadata.
+   * Definitions must be registered in the child; Pi owns whether they are active. */
+  nativeTools?: readonly string[];
   profile: TaskProfile;
   canWrite?: boolean;
   cwd?: string;
@@ -183,6 +184,8 @@ export interface TaskResult {
   model?: string;
   routing?: TaskRouting;
   thinking?: TaskSpec["thinking"];
+  /** Pi-reported effective level after model-specific mapping, when available. */
+  effectiveThinking?: TaskSpec["thinking"];
   profile?: TaskProfile;
   canWrite?: boolean;
   stopReason?: string;
@@ -266,6 +269,8 @@ export interface RunSnapshot {
     model?: string;
     routing?: TaskRouting;
     thinking?: TaskSpec["thinking"];
+    /** Pi-reported effective level after model-specific mapping, when available. */
+    effectiveThinking?: TaskSpec["thinking"];
     profile?: TaskProfile;
     canWrite?: boolean;
     outputFile?: string;

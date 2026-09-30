@@ -41,7 +41,7 @@ The standalone pi-subagent provides rich TUI support for monitoring, inspecting,
   per-task stats, and a one-line tail (live activity or first output line).
 - Expanded (Ctrl+O / `app.tools.expand`): full task output capped with a dim
   `… +N lines` trailer pointing at the artifact/child session.
-- Expanded detail adds a bounded route summary for Jev-routed runs: original selection, ranked probabilities, shared ordinary selected tools (the immutable selector choice, not the separately configured passthrough list), selector version, answer-level confidence, outcome and selection latency. The actual execution model stays separate from the original choice. Large lists show a preview and total count; old runs without new fields remain readable. Compact results and completion notifications show at most the last five attempt models and label a shortened chain with its total attempt count.
+- Expanded detail adds a bounded route summary for Jev-routed runs: original selection, ranked probabilities, shared ordinary selected tools (the immutable selector choice, with official native exposure names shown separately), selector version, answer-level confidence, outcome and selection latency. The actual execution model stays separate from the original choice. Large lists show a preview and total count; old runs without new fields remain readable. Compact results and completion notifications show at most the last five attempt models and label a shortened chain with its total attempt count.
 - Durations freeze at `endedAt`; running durations tick at render time.
 - Terminal diagnostics use one bounded projection everywhere: failures/lost runs use
   `failed — <error>` / `lost — <reason>`, timeouts use `timeout (routing|queued|starting|running|cancelling)`,
@@ -49,7 +49,7 @@ The standalone pi-subagent provides rich TUI support for monitoring, inspecting,
   output or stop explanation. Compact surfaces collapse that line safely; expanded detail wraps
   the same source text. The run id remains discoverable even when routing or setup fails, so
   status/wait can collect the bounded evidence without starting a duplicate child.
-- Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
+- Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. When Pi maps a requested thinking level to another effective level, expanded/inline details show `thinking:requested→effective` (for example `off→minimal`). Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
 
 ### Footer status
 Terse and actionable only: `⚙ 2 running · 1 ready · /subagents`. Cleared when
@@ -89,7 +89,7 @@ text with run ids and a `wait { id }` pointer.
 - List: two lines per run — glyph/id/state/stats, then the task preview.
   Selection cursor `▶`, animated spinner for live runs.
 - Detail: run stats, summary, then per-task sections (glyph, label,
-  model/selector route/profile/thinking, canonical timeout/error diagnostic,
+  model/selector route/profile/thinking (and requested→effective thinking when Pi reports it), canonical timeout/error diagnostic,
   usage, pointers, transcript/final output), scrollable with ↑↓/j/k and
   PageUp/PageDown. The detail viewport is calculated from the current terminal
   height and the overlay's 80% max-height, reserving space for pagination and
@@ -137,7 +137,7 @@ usage and a bounded `Optional synthesis blocked: …` diagnostic instead of
 discarding or re-routing them.
 
 ### Plan results (tool output, not TUI)
-`action:"plan"` returns the initial model, a bounded probability-ranked candidate preview, common tools, effective total attempt limit and selector usage. Probabilities are selector preferences, not uptime estimates, and `confidence` belongs to the original answer. The common tool list includes configured `passthroughTools` once, while routing detail retains the ordinary selector choice; resolution notes identify trusted infrastructure separately. Startup accepts registered host-inactive passthrough definitions but refuses missing registration, extra active tools and ordinary activity mismatches. There is no new activation indicator or UI state. A plan reports no actual attempts; a later invocation selects again. It starts no child and creates no run entry, so plan never adds an overlay row or ambient widget. A plan whose optional synthesis selection fails still returns the valid worker plan and labels only that stage blocked with its diagnostic.
+`action:"plan"` returns the initial model, a bounded probability-ranked candidate preview, common tools, effective total attempt limit and selector usage. Probabilities are selector preferences, not uptime estimates, and `confidence` belongs to the original answer. The common tool list includes the automatically derived official native definitions once, while routing detail retains the ordinary selector choice; resolution notes identify the native exposure separately. Startup accepts registered host-inactive native definitions but refuses missing registration, active names outside the finalized allowlist and ordinary activity mismatches. There is no new activation indicator or UI state. A plan reports no actual attempts; a later invocation selects again. It starts no child and creates no run entry, so plan never adds an overlay row or ambient widget. A plan whose optional synthesis selection fails still returns the valid worker plan and labels only that stage blocked with its diagnostic.
 
 ### Failed-attempt output
 

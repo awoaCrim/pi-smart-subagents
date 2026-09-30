@@ -3,7 +3,7 @@
  *
  * Loaded explicitly by the Pi backend (`pi -e <this file>`) for Jev-routed child tasks
  * only. It registers one nonce-specific command and, when invoked, reports the child's
- * *actual* active model/tools, expected registered passthrough names and nested-tool provenance. The control side
+ * *actual* active model/tools, expected registered native names and nested-tool provenance. The control side
  * (`src/runner.ts`, via `src/startup-check.ts`) is what decides pass/fail — this file
  * never grants anything and never trusts itself.
  *
@@ -20,7 +20,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { MAX_PASSTHROUGH_TOOLS } from "./passthrough-tools.js";
+import { MAX_TOOL_NAMES } from "./pi-tools.js";
+import { isThinkingLevel } from "./thinking.js";
 import {
   PREFLIGHT_ACK_SCHEMA,
   PREFLIGHT_ACK_TYPE,
@@ -41,6 +42,7 @@ interface PreflightToolMetadata {
 
 /** Minimal structural view of the Pi extension API we rely on. */
 interface PreflightApi {
+  getThinkingLevel?: () => unknown;
   registerCommand(
     name: string,
     options: { description?: string; handler: (args: string, ctx: PreflightCommandContext) => unknown },
@@ -56,6 +58,15 @@ interface PreflightApi {
 const HOST_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const HOST_SEARCH_DEPTH = 6;
 
+function safeEffectiveThinking(pi: PreflightApi): string | null {
+  try {
+    const value = pi.getThinkingLevel?.();
+    return isThinkingLevel(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function safeActiveTools(pi: PreflightApi): string[] | null {
   try {
     const active = pi.getActiveTools();
@@ -65,7 +76,7 @@ function safeActiveTools(pi: PreflightApi): string[] | null {
   }
 }
 
-function safeRegisteredPassthrough(pi: PreflightApi, wanted: ReadonlySet<string>): string[] | null {
+function safeRegisteredNative(pi: PreflightApi, wanted: ReadonlySet<string>): string[] | null {
   try {
     const all = pi.getAllTools();
     if (!Array.isArray(all)) return null;
@@ -75,7 +86,7 @@ function safeRegisteredPassthrough(pi: PreflightApi, wanted: ReadonlySet<string>
         names.push(tool.name);
         // Preserve duplicate/oversized evidence for refusal, but never emit an
         // unbounded registry or any definitions, schemas or unrelated metadata.
-        if (names.length > MAX_PASSTHROUGH_TOOLS) break;
+        if (names.length > MAX_TOOL_NAMES) break;
       }
     }
     return names;
@@ -155,7 +166,7 @@ export default function childPreflight(pi: PreflightApi): void {
   if (!manifest.ok) return;
   const expectation = manifest.manifest;
   const nestedWanted = new Set(expectation.nestedTools ?? []);
-  const passthroughWanted = new Set(expectation.passthroughTools ?? []);
+  const nativeWanted = new Set(expectation.nativeTools ?? []);
 
   pi.registerCommand(preflightCommandBase(expectation.nonce), {
     description: "private pi-subagent startup check",
@@ -166,12 +177,14 @@ export default function childPreflight(pi: PreflightApi): void {
             id: typeof ctx.model.id === "string" ? ctx.model.id : undefined,
           }
         : null;
+      const effectiveThinking = safeEffectiveThinking(pi);
       const payload = {
         schema: PREFLIGHT_ACK_SCHEMA,
         nonce: expectation.nonce,
         model,
+        ...(effectiveThinking === null ? {} : { thinking: effectiveThinking }),
         tools: safeActiveTools(pi),
-        ...(passthroughWanted.size ? { registeredPassthroughTools: safeRegisteredPassthrough(pi, passthroughWanted) } : {}),
+        ...(nativeWanted.size ? { registeredNativeTools: safeRegisteredNative(pi, nativeWanted) } : {}),
         nestedToolsWithSource: safeNestedProvenance(pi, nestedWanted),
         host: readHostInfo(),
       };

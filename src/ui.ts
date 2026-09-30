@@ -415,7 +415,13 @@ export class SubagentsOverlay implements Component {
         const caps = [
           result.model,
           result.profile ? `${result.profile}/${result.canWrite ? "RW" : "RO"}` : "",
-          result.thinking ? `thinking:${result.thinking}` : "",
+          result.effectiveThinking && result.effectiveThinking !== result.thinking
+            ? `thinking:${result.thinking ?? "default"}→${result.effectiveThinking}`
+            : result.effectiveThinking
+              ? `thinking:${result.effectiveThinking}`
+              : result.thinking
+                ? `thinking:${result.thinking}`
+                : "",
         ].filter(Boolean).join(" · ");
         body.push(truncateToWidth(`${rGlyph} ${label} ${theme.fg("dim", caps)}`, width));
         const diagnostic = taskDiagnostic(result);

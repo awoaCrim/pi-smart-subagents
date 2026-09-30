@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+## 0.11.7 — 2026-10-01
+
+### Pi 0.99.1 compatibility and adaptive routing
+
+- Build Jev's ordinary tool catalog from Pi's official active `direct` exposure metadata while automatically carrying registered `model-only`, `codemode` and `deferred` definitions; `hidden` tools are excluded without broadening child allowlists.
+- Add small difficulty-based thinking defaults (`simple` → `minimal`, `moderate` → `medium`, `complex` → `high`) after explicit/agent/profile/candidate settings and before parent inheritance. Keep thinking values opaque and let Pi map or clamp them per model.
+- Extend the routed startup acknowledgement and persisted/displayed results with Pi's optional effective thinking level, so model-specific clamping such as `off` → `minimal` is observable without making old children incompatible.
+- Preserve compatibility with older hosts by treating effective-thinking evidence as optional; retain the provider-free Pi 0.99.1 handshake and RPC/tool behavior checks.
+
+### Official Pi tool exposure boundary
+
+- Replace the package-owned tool-name trust list with Pi 0.99.0+ `ToolExposure` metadata. Active `direct` tools, including direct SDK/custom tools, remain ordinary Jev candidates; `model-only`, `codemode` and `deferred` definitions are automatically carried native tools; `hidden` definitions are excluded.
+- Require derived native definitions to register in the child while letting Pi own their activity. Preserve exact ordinary activity, source/model/nonce/host checks, nested depth/spawn rules, shared ranked tools and original selector metadata, without forced activation or retry/accounting changes.
+
 ## 0.11.6 — 2026-09-30
 
 ### Generic passthrough infrastructure tools

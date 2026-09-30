@@ -23,7 +23,7 @@ import {
   type PreflightManifest,
 } from "../startup-check.js";
 
-import { EMPTY_PASSTHROUGH_TOOLS, NESTED_DISPATCH_TOOLS, isPassthroughToolSubset } from "../passthrough-tools.js";
+import { EMPTY_TOOL_NAMES, NESTED_DISPATCH_TOOLS, isToolNameSubset } from "../pi-tools.js";
 
 const PI_CAPABILITIES: BackendCapabilities = {
   steer: true,
@@ -45,11 +45,11 @@ export class PiBackend implements BackendAdapter {
     // prompt: Pi silently drops unknown `--tools` names, so parent catalog knowledge is
     // not proof of what the child actually loaded.
     const routed = spec.routing !== undefined;
-    const passthrough = spec.passthroughTools === undefined ? EMPTY_PASSTHROUGH_TOOLS : spec.passthroughTools;
-    if (!isPassthroughToolSubset(passthrough, spec.tools ?? []) || (!routed && passthrough.length > 0)) {
+    const nativeTools = spec.nativeTools === undefined ? EMPTY_TOOL_NAMES : spec.nativeTools;
+    if (!isToolNameSubset(nativeTools, spec.tools ?? []) || (!routed && nativeTools.length > 0)) {
       throw startupFailure(
-        "passthrough_tools_invalid",
-        "passthroughTools requires a normalized subset of a routed tool allowlist and registered-definition attestation; prepare the task through local routing policy.",
+        "native_tools_invalid",
+        "Official native tools must be a normalized subset of a routed tool allowlist; prepare the task through local routing policy.",
       );
     }
     if (routed) {
@@ -90,8 +90,13 @@ export class PiBackend implements BackendAdapter {
     // applies depth/spawn/profile gating before nested dispatch tools become
     // candidates. Unrouted (trusted SDK) callers keep the historical behaviour.
     let toolList: string[] | undefined;
+    let finalizedToolList: string[] | undefined;
     if (spec.tools !== undefined) {
-      toolList = routed ? [...new Set(spec.tools)] : spec.tools.filter((tool) => tool !== "subagent");
+      finalizedToolList = routed ? [...new Set(spec.tools)] : spec.tools;
+      // Pass the full finalized routed allowlist. Pi's official exposure metadata
+      // controls how native names participate; the acknowledgement verifies their
+      // registration but does not require them to appear in the active set.
+      toolList = routed ? finalizedToolList : finalizedToolList.filter((tool) => tool !== "subagent");
       if (toolList.length === 0) args.push("--no-tools");
       else args.push("--tools", toolList.join(","));
     }
@@ -119,13 +124,13 @@ export class PiBackend implements BackendAdapter {
           "The packaged child-preflight extension is missing, so the routed child's model and tools cannot be verified.",
         );
       });
-      const nestedTools = (toolList ?? []).filter((tool) => (NESTED_DISPATCH_TOOLS as readonly string[]).includes(tool));
+      const nestedTools = (finalizedToolList ?? []).filter((tool) => (NESTED_DISPATCH_TOOLS as readonly string[]).includes(tool));
       const manifest: PreflightManifest = {
         schema: PREFLIGHT_MANIFEST_SCHEMA,
         nonce: createPreflightNonce(),
         model: spec.model!,
-        tools: toolList ?? [],
-        ...(passthrough.length > 0 ? { passthroughTools: passthrough } : {}),
+        tools: finalizedToolList ?? [],
+        ...(nativeTools.length > 0 ? { nativeTools } : {}),
         ...(nestedTools.length > 0 ? { nestedTools } : {}),
       };
       const tempPreflightDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-subagent-preflight-"));

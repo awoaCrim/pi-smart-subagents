@@ -89,6 +89,7 @@ export function toPersistedResult(result: TaskResult): PersistedResult {
     usage: result.usage,
     model: result.model,
     thinking: result.thinking,
+    effectiveThinking: result.effectiveThinking,
     profile: result.profile,
     canWrite: result.canWrite,
     outputFile: result.outputFile,
@@ -141,6 +142,8 @@ function resultFingerprint(result: TaskResult): string {
     // not keep stale UI state when the actual model, activity latch or attempt
     // history changed between attempts.
     result.model ?? "",
+    result.thinking ?? "",
+    result.effectiveThinking ?? "",
     result.toolActivity ?? "",
     JSON.stringify(normalizeModelAttempts(result.modelAttempts)) ?? "",
     JSON.stringify(normalizeAttemptedModels(result.attemptedModels)) ?? "",
@@ -174,6 +177,7 @@ export function toCheckpointResult(result: TaskResult): PersistedResult {
     usage: result.usage,
     model: result.model,
     thinking: result.thinking,
+    effectiveThinking: result.effectiveThinking,
     profile: result.profile,
     canWrite: result.canWrite,
     outputFile: result.outputFile,

@@ -14,7 +14,7 @@ import { addUsage } from "./usage.js";
 import { ProtocolParser, type ProtocolUpdate } from "./protocol.js";
 import { Semaphore } from "./semaphore.js";
 import { defaultConfig } from "./config.js";
-import { isPassthroughToolSubset } from "./passthrough-tools.js";
+import { isToolNameSubset } from "./pi-tools.js";
 import { DEPTH_ENV_VAR, SPAWNS_ENV_VAR, parseDepth } from "./policy.js";
 import {
   processStartTime,
@@ -923,7 +923,7 @@ export class ChildRunner {
       });
 
       type StartupOutcome =
-        | { kind: "ok" }
+        | { kind: "ok"; effectiveThinking?: TaskSpec["thinking"] }
         | { kind: "cancelled" }
         | { kind: "failed"; code: string; detail: string };
 
@@ -994,19 +994,19 @@ export class ChildRunner {
               "The child's startup manifest tool allowlist did not match the finalized route tools.",
             );
           }
-          const passthrough = spec.passthroughTools === undefined ? [] : spec.passthroughTools;
-          if (!isPassthroughToolSubset(passthrough, spec.tools ?? [])
-            || !sameNameSet(parsed.manifest.passthroughTools ?? [], passthrough)) {
+          const nativeTools = spec.nativeTools === undefined ? [] : spec.nativeTools;
+          if (!isToolNameSubset(nativeTools, spec.tools ?? [])
+            || !sameNameSet(parsed.manifest.nativeTools ?? [], nativeTools)) {
             throw startupFailure(
               "preflight_manifest_mismatch",
-              "The child's startup manifest passthrough subset did not match the locally authorized tools.",
+              "The child's startup manifest native tool set did not match the locally derived official exposure set.",
             );
           }
           expectation = {
             nonce: parsed.manifest.nonce,
             model: parsed.manifest.model,
             tools: parsed.manifest.tools,
-            ...(passthrough.length ? { passthroughTools: passthrough } : {}),
+            ...(nativeTools.length ? { nativeTools } : {}),
             nestedTools: parsed.manifest.nestedTools,
             ownEntryPaths: ownExtensionEntryCandidates(),
             preflightCommandPath: ownPreflightExtensionPath(),
@@ -1152,7 +1152,10 @@ export class ChildRunner {
         if (problems.length > 0) {
           return { kind: "failed", code: "preflight_ack_rejected", detail: summarizePreflightProblems(problems) };
         }
-        return { kind: "ok" };
+        return {
+          kind: "ok",
+          ...(typeof ack.thinking === "string" ? { effectiveThinking: ack.thinking as TaskSpec["thinking"] } : {}),
+        };
       };
 
       let startupOutcome: StartupOutcome = { kind: "ok" };
@@ -1178,6 +1181,10 @@ export class ChildRunner {
       // even when the final acknowledgement was delivered in the same microtask turn.
       if (startupOutcome.kind === "ok" && (internal.signal.aborted || abortSignal?.aborted)) {
         startupOutcome = { kind: "cancelled" };
+      }
+      if (startupOutcome.kind === "ok" && startupOutcome.effectiveThinking !== undefined) {
+        result.effectiveThinking = startupOutcome.effectiveThinking;
+        progress({ effectiveThinking: startupOutcome.effectiveThinking });
       }
       if (startupOutcome.kind === "failed") {
         // Capability mismatch is not transient: never compensate by broadening tools,
