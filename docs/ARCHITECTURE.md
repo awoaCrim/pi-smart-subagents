@@ -32,7 +32,7 @@
 - `maintenance.ts`: filesystem GC (session files) and abort-race helpers; kept out of persistence.
 - `usage.ts`: provider-reported root/subagent/combined accounting, plus a separate
   once-per-request routing-token category whose currency is reported as unreported.
-- `policy.ts` / `schema.ts`: discriminated request validation and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the ordinary Jev choice plus explicitly configured trusted infrastructure, with no hidden presets. Profile checks reject ordinary writers in read-only modes; custom passthrough safety is explicit user trust, not inferred effects.
+- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the Jev-selected active `direct` subset plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions must be registered in the child but remain host-controlled for activity. Direct SDK/custom tools are ordinary candidates; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking resolves per explicit/agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
   shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
@@ -48,18 +48,16 @@
   or child arguments. The router has no engine imports and makes no parent UI calls.
 - `config.ts`: defaults ← `~/.pi/subagent.json` ← `PI_SUBAGENT_*` env overrides. Each
   dispatch receives a fresh frozen `jevRouting` snapshot, so a valid `baseUrl` edit affects
-  the next dispatch without mutating an existing router invocation. The optional top-level
-  `passthroughTools` array defaults empty; `passthrough-tools.ts` owns bounded name parsing
-  and strict internal subset checks, not effect classification. Policy validates real parent
-  registration/safety, excludes this frozen subset from ordinary ceilings/selector questions,
-  then merges it once without changing the original decision or writer classification.
+  the next dispatch without mutating an existing router invocation. Tool exposure is read
+  from the parent Pi metadata snapshot in `extension.ts`; no user tool-name list or source
+  heuristic is loaded from config.
 - `structured.ts`: structured-output contract (dependency-free JSON-Schema subset
   validation, fenced json:result extraction, contract/repair prompts) and
   conservative double-encoded-arg repair. The runner gates the child's settle on
   validation and runs one steer-based repair round after an otherwise successful invalid answer. Ranked provider-error/aborted attempts skip repair and cannot publish structuredOutput from failed text. The latest completed assistant text replaces earlier text even when empty, so a host retry cannot reuse the failed turn's JSON.
 - `agents.ts`: named agent files (`.pi/agents/`, `.agents/agents/`, global agent dir).
   Flat-YAML frontmatter + markdown persona body; resolved in policy with explicit
-  params > agent file > profile taskDefaults > parent inheritance. Catalog refreshes
+  params > agent file > profile taskDefaults > selected candidate > difficulty default > parent inheritance where applicable. Catalog refreshes
   lazily (5s TTL) so new files work mid-session; symlinks and oversized files skipped.
 - `notifications.ts`: background-run completion batching. Successes group within a
   debounce window (hard cap on hold time); failures bypass batching and flush
@@ -68,7 +66,8 @@
 - `ui.ts`: renderers, footer status and `/subagents` inspector. The ambient widget
   (extension-side) shows BACKGROUND runs only — foreground runs render inline as the
   tool result, so widget display would double-render them.
-- `extension.ts`: wiring only; no business logic. Nested children at the depth ceiling do
+- `extension.ts`: wiring only; it snapshots Pi tool metadata/active names once and passes
+  the official direct/native projections into policy. Nested children at the depth ceiling do
   not re-register the tool; only top-level parents run maintenance.
 
 Invariants:
@@ -162,14 +161,18 @@ Invariants:
     Startup verification is the enforcement companion: the Pi adapter supplies a
     package-local preflight extension plus a bounded non-secret expectation, verifies that
     the nonce-specific bootstrap command exists from the expected package source, then
-    requires the child to acknowledge the exact selected model, active ordinary tools and
-    registered definitions for the locally expected passthrough subset (including the existing
-    nested-tool source check) before the real task prompt is sent. Only that configured subset
-    may be host-inactive; every active name must be allowed. The internal task/manifest subset
-    must agree, and nonempty passthrough requires explicit bounded registration proof. It is
-    not a caller field, per-model tool plan or persisted executable policy. No forced activation,
-    name/group preset, foreign config or indefinite activation wait is introduced. Missing or
-    mismatched acknowledgement is a capability/startup diagnostic, never compensated by broadening tools or choosing another model. Every ranked replacement gets fresh attestation against the same allowed/passthrough sets before the task prompt. Empty/absent passthrough retains exact-active verification and the ordinary-only SDK path.
+    requires the child to acknowledge the exact selected model, active ordinary direct tools
+    and registered official native definitions (including the existing nested-tool source
+    check) before the real task prompt is sent. Native definitions may be host-inactive;
+    every active name must still be in the finalized allowlist. The derived native subset
+    must agree across task/manifest, and registration proof is explicit and bounded. It is
+    not a caller field, per-model tool plan or persisted executable policy. Missing or
+    mismatched acknowledgement is a capability/startup diagnostic, never compensated by
+    broadening tools or choosing another model. Every ranked replacement gets fresh
+    attestation against the same ordinary/native sets before the task prompt. Hidden tools
+    are excluded, missing exposure defaults to direct, and unknown present exposure values
+    are dropped. No user name list, source preset, forced activation or indefinite activation
+    wait is introduced.
 31. An absolute task deadline is created before preflight/selection, and routing, setup,
     queue and retries all count against it. Pending selector work is tracked per session
     runtime, aborted on cancellation, shutdown or session switch, and every post-await

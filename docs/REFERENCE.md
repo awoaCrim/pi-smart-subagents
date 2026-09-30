@@ -105,7 +105,7 @@ A plan runs local preflights and Jev selection without spawning a child or creat
 
 #### Task difficulty
 
-`difficulty` is an optional descriptive hint added to Jev's routing context. It never hardcodes a model, reorders your candidates, changes tool permissions, or alters retry/failover behavior.
+`difficulty` is an optional scope/reasoning hint added to Jev's routing context. It never hardcodes a model, reorders your candidates, changes tool permissions, or alters retry/failover behavior. When no explicit task, agent, profile-default, or selected-candidate thinking value exists, it also supplies a small local thinking default: `simple` → `minimal`, `moderate` → `medium`, `complex` → `high`. This mapping does not override an explicit or candidate value and does not guarantee the model will use that level.
 
 | Value      | Use for                                                                                                                          |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -121,7 +121,7 @@ A plan runs local preflights and Jev selection without spawning a child or creat
 }
 ```
 
-Choose the lowest honest level. `simple` lowers the chance that a simple task is routed to an unnecessarily large model, but it does not guarantee a specific model: candidate descriptions, profile, thinking and Jev's probability ranking still decide. Omit the field when you have no honest signal; older callers stay valid and no default difficulty is inferred. An invalid value is rejected locally before any selector request. `difficulty` is request context only; it is not stored in results, session entries or run snapshots.
+Choose the lowest honest level. `simple` can steer Jev toward a candidate suited to bounded work and, when thinking is otherwise unspecified, uses Pi's `minimal` level; it does not guarantee a specific model or semantic effort because candidate descriptions, profile, candidate thinking and Jev's probability ranking still decide. Omit the field when you have no honest signal; older callers stay valid and no difficulty is inferred. An invalid value is rejected locally before any selector request. The difficulty itself is not stored in results, session entries or run snapshots, but the resolved requested thinking is shown in plans and routed result metadata.
 
 #### Structured output
 
@@ -245,11 +245,11 @@ ignored.
 | ---------------------------- | ------------------------------------------------------- | ------------------------------------------- |
 | `explore` (parallel default) | Jev-selected subset of locally permitted read-only candidates | no project-file writes |
 | `review`                     | same as explore                                         | no project-file writes                      |
-| `general`                    | Jev chooses from the full available locally permitted catalog | yes for selected write-capable tools; unknown custom tools count as writable |
+| `general`                    | Jev chooses from the parent's active locally permitted catalog | yes for selected write-capable tools; unknown custom tools count as writable |
 
-Jev chooses individual tool names, not a capability bundle. Candidates come from the full available locally permitted catalog, not from the agent file's `tools` defaults and not from the parent's currently active tools. An explicit task `tools` list is an ordinary candidate ceiling, and explore/review keep their read-only rule regardless of what the selector returns. Configured trusted `passthroughTools` are preserved separately under the trust boundary below; they are not selector questions. An empty ordinary selection never means "all tools".
+Jev chooses individual tool names, not a capability bundle. Ordinary candidates are active `direct` tools from one Pi `getAllTools()` + active-name snapshot; registered-but-inactive direct definitions, `model-only`, `codemode` and `deferred` definitions are not ordinary selector candidates. `hidden` definitions are excluded. Direct SDK/custom tools remain ordinary candidates because classification follows official exposure, not source/name heuristics. They do not come from the agent file's `tools` defaults. An explicit task `tools` list is an ordinary candidate ceiling, and explore/review keep their read-only rule regardless of what the selector returns. An empty ordinary selection never means "all tools".
 
-The finalized tool set is passed to the child as Pi's `--tools` allowlist (`--no-tools` for a true empty set). Pi 0.86.0 is the verified baseline for built-in, extension and late-registered tool enforcement; a host that cannot honor that allowlist is refused rather than silently weakened, and the extension does not claim identical behavior on untested older releases. Before the real task prompt is sent, a verified private startup command must confirm the selected model, exact active ordinary tools and registered passthrough definitions. Only the parent-authorized passthrough subset may be inactive; all active names must be allowed. Missing registration, duplicate/malformed evidence, an unexpected active tool, or a source/model/nonce mismatch aborts with a startup diagnostic instead of running with a broader tool set. An older child without passthrough registration proof is refused when the list is nonempty.
+Pi 0.99.0+ official non-direct, non-hidden definitions are native managed tools: they are carried automatically in the finalized child allowlist and startup manifest, but are omitted from Jev questions and their activity remains host-owned. Older hosts without `exposure` metadata use Pi's default `direct` behavior. Source metadata is retained for provenance/diagnostics only, and annotations never establish write safety. The full finalized allowlist (ordinary direct names plus derived native names) is sent as Pi's `--tools` set (`--no-tools` when empty). Pi's official exposure semantics control how native names participate; startup confirms their registration but does not require native names to appear active. Before the real task prompt is sent, a verified private startup command confirms the selected model, exact ordinary active tools, native registration and nested-tool provenance. Active names outside the finalized allowlist, missing registration, duplicate/malformed evidence, or a source/model/nonce mismatch aborts with a startup diagnostic instead of broadening capabilities.
 
 Parallel write-capable tasks sharing one checkout are rejected unless each uses `isolation: "worktree"`, distinct `cwd`, or explicit `allow_shared_writes: true`.
 
@@ -261,7 +261,6 @@ Defaults can be overridden in `~/.pi/subagent.json`; runtime fields with an env 
 
 | Setting                 | Env var                               | Default                               |
 | ----------------------- | ------------------------------------- | ------------------------------------- |
-| `passthroughTools`      | none (config file only)              | `[]`                                  |
 | `maxTasksPerRun`        | `PI_SUBAGENT_MAX_TASKS`               | 8                                     |
 | `maxActiveProcesses`    | `PI_SUBAGENT_MAX_ACTIVE`              | 4                                     |
 | `maxQueuedTasks`        | `PI_SUBAGENT_MAX_QUEUED`              | 32                                    |
@@ -284,25 +283,6 @@ Defaults can be overridden in `~/.pi/subagent.json`; runtime fields with an env 
 | `widget`                | `PI_SUBAGENT_WIDGET`                  | `background` (`off` disables)         |
 | `notifications`         | `PI_SUBAGENT_NOTIFICATIONS`           | `batched` (`off` disables)            |
 | (bin)                   | `PI_SUBAGENT_BIN`                     | auto (`process.execPath` + CLI entry) |
-
-<a id="passthrough-tools"></a>
-#### Passthrough tools
-
-Add an optional top-level string array alongside `jevRouting` in the same `~/.pi/subagent.json` file:
-
-```json
-{
-  "passthroughTools": ["runtime_control", "session_store"]
-}
-```
-
-These are illustrative names, not presets; use the actual registered names of infrastructure you trust. The default is `[]`. Names are case-sensitive, trimmed and deduplicated in first-occurrence order. The array accepts at most 256 entries, each normalized name at most 256 characters; objects, non-strings, blanks, embedded whitespace/control characters, commas and wildcard patterns are rejected. No environment override, caller field, effect/activation attributes or foreign-extension config discovery exists. Malformed config or unavailable/disallowed names reject new work before paid selection; existing-run management remains available.
-
-The list is **explicit user approval of trusted non-project-writing infrastructure**, including under `explore` and `review`. The host cannot infer a custom tool's effects from its name or registration. Known writers (`bash`, `edit`, `write`), unclassified unsafe builtins and this package's nested-dispatch tools (`subagent`, `subagent_wait`) cannot become infrastructure through list membership. Unlisted custom tools retain conservative writer classification; ordinary writers still require the existing parallel/worktree safeguards. Profiles are tool policy, not an OS sandbox.
-
-Listed definitions must be registered in both parent and child. They are omitted from ordinary selector choices, survive a caller `tools:["read"]` or `tools:[]` ceiling and selector exclusions, and are appended once to the ordinary selected subset. An empty selection can therefore produce a passthrough-only allowlist, never all tools. The original route's `selectedTools` remains the ordinary choice. Plan, single/parallel tasks, resume/fork, `/btw`, optional synthesis and ranked replacements share this boundary; the invocation uses one frozen list, and config edits affect later invocations only.
-
-The child proves registration separately from activity. Each configured definition may be active or host-inactive at startup; the extension does not force activation, wait indefinitely, or assume a group size. Ordinary selected tools must be active, and every active name must be in the final allowlist. Missing registration or unusable proof is a non-transient startup failure, not permission to drop a name, broaden capabilities or try another model. With the list omitted/empty, the existing exact-active startup and ordinary-only SDK behavior is unchanged. The low-level SDK does not discover this config or implicitly trust names; nonempty internal passthrough metadata requires routed attestation.
 
 #### Jev routing
 
@@ -344,7 +324,7 @@ Jev receives only the current delegated task text, your model IDs and descriptio
 
 Every new extension-managed dispatch routes through Jev: `task`/`tasks[]`, `action:"plan"`, `/btw`, resume, fork, locally permitted nested dispatch and the optional `synthesis` child. `action:"plan"` calls Jev and runs the same local preflights, returns the resolved model/tool plan and the selector usage, and creates no child or run entry. A later dispatch selects again; there is no cached decision to reuse. If optional synthesis selection fails, the worker plan and its usage stay valid and synthesis is reported as blocked with its diagnostic.
 
-`thinking` is optional and is an opaque Pi thinking-level string. Common values include `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`, but the package does not remap or restrict model-specific values. Pi receives the value unchanged and decides whether the active model supports it. Resolution order is: explicit task `thinking` > agent frontmatter `thinking` > profile `taskDefaults.<profile>.thinking` > the selected candidate's optional `thinking` > the parent session's thinking level. Jev never chooses a thinking level.
+`thinking` is optional and is an opaque Pi thinking-level string. Common values include `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`, but the package does not remap or restrict model-specific values. Pi receives the value unchanged and decides whether the active model supports it. Resolution order is: explicit task `thinking` > agent frontmatter `thinking` > profile `taskDefaults.<profile>.thinking` > the selected candidate's optional `thinking` > the difficulty-derived default (`simple` → `minimal`, `moderate` → `medium`, `complex` → `high`) > the parent session's thinking level. Jev never chooses a thinking level. Pi may clamp or map the request for a particular model; routed startup evidence reports `effectiveThinking` when the host exposes it, so a result can show `thinking:requested→effective`. Older/reduced hosts may omit that optional observation.
 
 The extension re-reads `jevRouting` on each dispatch and injects non-secret routing guidance into the parent prompt, never the key. Configuration edits reach the next decision without a code change. Missing or invalid `jevRouting.apiKey`, or other invalid routing configuration, rejects new dispatch and plan with a remedy; management stays available.
 
@@ -356,7 +336,7 @@ Version `0.11.0` adds this behavior. Published `0.10.0` retries the selected mod
 
 TypeSafe's Choice response includes a probability for every eligible option. The extension retains that distribution and tries higher-probability candidates first. These values express the selector's preference, not measured model uptime or success rates. The separate `confidence` value belongs to the original answer. A tied maximum keeps Jev's returned choice first; other ties follow configured candidate order. Low or zero probability is not a new exclusion threshold.
 
-Jev selects one task-based tool subset, independent of the first execution model, for every attempt. The initial logical selection may use several HTTP batches; failover adds none. Each candidate still gets its own thinking default under the existing precedence and fresh model/ordinary-active/passthrough-registered startup verification. An attestation mismatch stops the task instead of trying a broader capability set.
+Jev selects one task-based tool subset, independent of the first execution model, for every attempt. The initial logical selection may use several HTTP batches; failover adds none. Each candidate still gets its own thinking default under the existing precedence and fresh model/ordinary-active/native-registered startup verification. An attestation mismatch stops the task instead of trying a broader capability set.
 
 Switching requires a settled provider error and conclusive evidence that no tool execution has begun in this invocation. Recognized cases include an explicitly unavailable model, temporary throttling, service overload and identifiable transport failures. Authentication/configuration errors, quota or billing exhaustion, invalid requests, context limits, refusals, poor answers, schema failures, cancellation and exhausted budgets do not trigger a model switch. Recognition uses only the latest completed assistant error's bounded message and documented primitive `diagnostics.error.code`, never ordinary answer text or arbitrary diagnostic details. Authentication, quota and other excluded evidence take precedence over an availability code. Unfamiliar error formats stop conservatively. A tool-start event blocks restart even when no result arrived; missing or malformed protocol evidence is not permission to retry. Historical tool messages in a resumed or forked session are not new execution.
 

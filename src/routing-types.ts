@@ -138,8 +138,8 @@ export interface RoutingConstraints {
   readonly requestedThinking?: string;
   readonly structuredOutput?: boolean;
   /**
-   * Descriptive dispatch difficulty supplied by the calling agent. Selector context only;
-   * never a local model tier, candidate order or permission rule.
+   * Descriptive dispatch difficulty supplied by the calling agent. Jev context plus a
+   * local thinking hint; never a fixed model tier, candidate order or permission rule.
    */
   readonly difficulty?: TaskDifficulty;
 }

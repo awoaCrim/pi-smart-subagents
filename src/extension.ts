@@ -60,6 +60,7 @@ import { JevRouter } from "./jev-router.js";
 import { routePreparedTasks, type RoutingCatalog } from "./dispatch-routing.js";
 import { runLocalPreflights } from "./dispatch-preflight.js";
 import { rankedMaxAttempts } from "./model-failover.js";
+import { partitionPiTools } from "./pi-tools.js";
 import type { RoutingReceipt } from "./routing-types.js";
 import { buildRoutingEvent, foldRoutingReceipts, MAX_ROUTING_DELIVERY_IDS, ROUTING_ENTRY_TYPE, type PersistedRoutingEvent } from "./persistence.js";
 
@@ -341,6 +342,7 @@ function compactDetails(
       process: result.process,
       finalOutput: utf8Preview(result.finalOutput ?? result.liveText, perResultText),
       transcript: utf8Preview(result.transcript, perResultText),
+      effectiveThinking: result.effectiveThinking,
       wrappedUp: result.wrappedUp,
       stalledSince: result.stalledSince,
       attempts: result.attempts,
@@ -519,8 +521,8 @@ function guidelines(catalog?: Map<string, AgentDefinition>): string[] {
     "Delegate independent, read-heavy exploration or clean-context review; keep tightly coupled work in the parent.",
     "Prefer agent:'<name>' when a named agent matches the task — its persona prompt is usually better than an improvised one. Compose fields manually only when no agent fits.",
     "Give every task a short description label (3-5 words) so runs are scannable in UIs and result indexes.",
-    "Set difficulty on every new task so Jev can weigh scope and reasoning demand: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Choose the lowest truthful level; difficulty is descriptive routing context, not a fixed model tier or permission change.",
-    "Profiles: explore/review reject ordinary write-capable tools; general offers the full available locally permitted catalog to Jev and may write. Explicit tools are an ordinary ceiling; agent tool defaults do not narrow candidates. User-configured passthroughTools are separately trusted non-project-writing infrastructure (not inferred effects or a sandbox), never known writer/unsafe builtin/nested-dispatch exemptions. They must be registered but may be host-inactive; ordinary selected tools must be active. Single tasks default to general, parallel tasks to explore.",
+    "Set difficulty on every new task so Jev can weigh scope and reasoning demand: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Choose the lowest truthful level; difficulty is not a fixed model tier or permission change, but it supplies the small adaptive thinking default (simple→minimal, moderate→medium, complex→high) when no stronger thinking setting exists.",
+    "Profiles: explore/review reject ordinary write-capable tools; general offers the parent's active locally permitted catalog to Jev and may write. Pi's official non-direct, non-hidden exposure tools are native managed definitions: they are not ordinary candidates, are carried automatically, and must be registered while Pi controls their activity. Direct SDK/custom tools remain ordinary candidates; source metadata and annotations do not grant safety. Explicit tools are an ordinary ceiling; agent tool defaults do not narrow candidates. Single tasks default to general, parallel tasks to explore.",
     "Parallel writers need isolation:'worktree' (each gets an isolated checkout; changed work lands on a branch). After a worktree run finishes, use action:'diff' to inspect, then 'apply' to bring changes into the main checkout or 'discard' to drop them.",
     "Set budgets: at max_turns/max_cost the child is steered to wrap up and given grace turns for a final answer (grace_turns tunes this); results end as 'partial' with wrappedUp:true when the child concluded. timeout_ms includes Jev selection, setup, queue and retries; max_cost excludes unreported TypeSafe currency; timeout results report the phase.",
     "Transient child failures may retry within the same invocation: ranked Jev routes advance to the next probability-ranked candidate only for a recognized model-availability failure that settles before any tool execution, sharing one task-based tool set and the total max_retries attempt budget (0 = first attempt only; never wraps back). A tool that started, uncertain evidence, or auth/quota/context/schema failures stop without switching. No selector retries or emergency models are used. Task-quality failures never retry.",
@@ -1241,13 +1243,23 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       try {
       // Management does not read a config file, credential or model/tool catalog.
       const dispatchConfig = management ? runtime.config : loadConfig(await readConfigFile());
-      const parentTools = management ? [] : pi.getAllTools()
-        .filter((tool) => tool.sourceInfo?.source !== "sdk" && !tool.sourceInfo?.path?.startsWith("<sdk:"));
+      // Take exactly one registered-metadata snapshot and one active-name snapshot.
+      // The official exposure partition below drives both policy and Jev's catalog;
+      // SDK/custom direct tools are intentionally not filtered by source.
+      const rawParentTools: readonly unknown[] = management ? [] : pi.getAllTools();
+      const activeTools: unknown = management ? [] : pi.getActiveTools();
+      const activeToolNames = new Set(
+        (Array.isArray(activeTools) ? activeTools : [])
+          .filter((name): name is string => typeof name === "string"),
+      );
+      const partition = partitionPiTools(rawParentTools, activeToolNames);
+      const directRegistered = partition.registered.filter((tool) => tool.exposure === "direct");
       const parent: ParentContext = {
         cwd: ctx.cwd,
         thinking: management ? undefined : pi.getThinkingLevel() as TaskSpec["thinking"],
-        availableTools: parentTools.map((tool) => tool.name),
-        builtinTools: parentTools.filter((tool) => tool.sourceInfo?.source === "builtin").map((tool) => tool.name),
+        availableTools: directRegistered.map((tool) => tool.name),
+        activeTools: partition.ordinary.map((tool) => tool.name),
+        nativeTools: partition.native.map((tool) => tool.name),
         depth: runtime.depth,
         sessionFile: ctx.sessionManager.getSessionFile() ?? undefined,
       };
@@ -1259,8 +1271,6 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         agents: management ? undefined : agentCatalog(runtime),
         jevRouting: dispatchConfig.jevRouting,
         jevRoutingError: dispatchConfig.jevRoutingError,
-        passthroughTools: dispatchConfig.passthroughTools,
-        passthroughToolsError: dispatchConfig.passthroughToolsError,
       };
       const validated = validateSubagentRequest(params, parent, preparation);
       if (!validated.ok) fail(validated.error);
@@ -1476,7 +1486,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       routingScope.assertOwner();
       const catalog: RoutingCatalog = {
         models: eligibleModelCandidates(dispatchConfig.jevRouting!, ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`)),
-        tools: toToolCandidates(parentTools),
+        tools: toToolCandidates(partition.ordinary),
       };
       if (!catalog.models.length) fail("No configured Jev candidate is locally available. Check exact model IDs and configured provider authentication.");
       const router = new JevRouter({ config: dispatchConfig.jevRouting!, onReceipt: routingScope.record });
@@ -1761,6 +1771,8 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           state: task.state,
           usage: task.usage,
           model: task.model,
+          thinking: task.thinking,
+          effectiveThinking: task.effectiveThinking,
           routing: task.routing,
           stopReason: task.stopReason,
           timeoutPhase: task.timeoutPhase,

@@ -364,6 +364,8 @@ export interface PersistedResult {
   usage: UsageStats;
   model?: string;
   thinking?: TaskSpec["thinking"];
+  /** Optional Pi-reported effective thinking level; old snapshots omit it. */
+  effectiveThinking?: TaskSpec["thinking"];
   profile?: TaskProfile;
   canWrite?: boolean;
   outputFile?: string;
@@ -555,6 +557,7 @@ function normalizeResult(value: unknown): PersistedResult | undefined {
     usage: normalizeUsage(r.usage),
     model: typeof r.model === "string" ? r.model : undefined,
     thinking: isThinkingLevel(r.thinking) ? r.thinking : undefined,
+    effectiveThinking: isThinkingLevel(r.effectiveThinking) ? r.effectiveThinking : undefined,
     profile: ["explore", "review", "general"].includes(String(r.profile)) ? r.profile : undefined,
     canWrite: typeof r.canWrite === "boolean" ? r.canWrite : undefined,
     outputFile: typeof r.outputFile === "string" ? r.outputFile : undefined,

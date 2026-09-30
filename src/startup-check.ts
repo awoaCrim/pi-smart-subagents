@@ -3,7 +3,8 @@
  *
  * A routed dispatch must prove *before* the real task prompt reaches the child that the
  * child actually loaded the expected execution model, active ordinary tools and registered
- * passthrough definitions. Only the locally expected passthrough subset may be inactive.
+ * native definitions derived from Pi's official exposure metadata. Native activity remains
+ * host-owned; ordinary direct tools must be active.
  * Parent-side catalog knowledge is not proof: Pi silently drops unknown `--tools` names,
  * and a child may load a different (possibly older) copy of this package, whose nested
  * `subagent` tool would bypass routing entirely.
@@ -28,7 +29,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { EMPTY_PASSTHROUGH_TOOLS, isPassthroughToolSubset } from "./passthrough-tools.js";
+import { EMPTY_TOOL_NAMES, MAX_TOOL_NAME_LENGTH, isToolNameList, isToolNameSubset } from "./pi-tools.js";
+import { isThinkingLevel } from "./thinking.js";
 
 /** Custom-message type of the child-side acknowledgement. */
 export const PREFLIGHT_ACK_TYPE = "pi-subagent-preflight-ack";
@@ -56,7 +58,6 @@ export const PREFLIGHT_FAILURE_STOP_REASON = "capability_mismatch";
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_ACK_TOOLS = 512;
 const MAX_ACK_NESTED = 512;
-const MAX_NAME_LENGTH = 256;
 const MAX_MODEL_LENGTH = 512;
 const MAX_PROBLEMS_IN_MESSAGE = 8;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
@@ -67,10 +68,10 @@ export interface PreflightManifest {
   readonly nonce: string;
   /** Exact `provider/modelId` the child must have active. */
   readonly model: string;
-  /** Finalized allowlist (ordinary Jev selection + configured infrastructure). */
+  /** Finalized allowlist (ordinary Jev selection + official native definitions). */
   readonly tools: readonly string[];
-  /** Locally authorized registered definitions whose activation is host-owned. */
-  readonly passthroughTools?: readonly string[];
+  /** Official non-direct definitions whose activation is host-owned. */
+  readonly nativeTools?: readonly string[];
   /** Nested dispatch tools whose loaded source must be this package's extension entry. */
   readonly nestedTools?: readonly string[];
 }
@@ -80,7 +81,7 @@ export interface PreflightExpectation {
   readonly nonce: string;
   readonly model: string;
   readonly tools: readonly string[];
-  readonly passthroughTools?: readonly string[];
+  readonly nativeTools?: readonly string[];
   readonly nestedTools?: readonly string[];
   /** Expected own extension entry paths; defaults to the current package's entries. */
   readonly ownEntryPaths?: readonly string[];
@@ -99,8 +100,10 @@ export interface PreflightAckPayload {
   readonly schema?: unknown;
   readonly nonce?: unknown;
   readonly model?: { provider?: unknown; id?: unknown } | null;
+  /** Optional host-effective Pi thinking level; absent on reduced/older hosts. */
+  readonly thinking?: unknown;
   readonly tools?: unknown;
-  readonly registeredPassthroughTools?: unknown;
+  readonly registeredNativeTools?: unknown;
   readonly nestedToolsWithSource?: unknown;
   readonly host?: { version?: unknown } | null;
 }
@@ -243,9 +246,9 @@ export function parsePreflightManifest(raw: unknown): PreflightManifestParse {
   if (!tools) {
     return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried no usable tool list." };
   }
-  const passthroughTools = parsed.passthroughTools;
-  if (passthroughTools !== undefined && !isPassthroughToolSubset(passthroughTools, tools)) {
-    return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried an unusable passthrough subset." };
+  const nativeTools = parsed.nativeTools;
+  if (nativeTools !== undefined && !isToolNameSubset(nativeTools, tools)) {
+    return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried an unusable native tool set." };
   }
   let nestedTools: string[] | undefined;
   if (parsed.nestedTools !== undefined) {
@@ -257,19 +260,13 @@ export function parsePreflightManifest(raw: unknown): PreflightManifestParse {
   return {
     ok: true,
     manifest: { schema: PREFLIGHT_MANIFEST_SCHEMA, nonce: parsed.nonce, model: parsed.model, tools, nestedTools,
-      ...(passthroughTools === undefined ? {} : { passthroughTools }),
+      ...(nativeTools === undefined ? {} : { nativeTools }),
     },
   };
 }
 
 function readNameList(value: unknown, maxCount: number): string[] | null {
-  if (!Array.isArray(value) || value.length > maxCount) return null;
-  const out: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || entry.length === 0 || entry.length > MAX_NAME_LENGTH) return null;
-    out.push(entry);
-  }
-  return new Set(out).size === out.length ? out : null;
+  return isToolNameList(value, maxCount) ? [...value] : null;
 }
 
 export interface ResolvedPreflightCommand {
@@ -393,8 +390,9 @@ export function compareHostVersion(version: unknown): "ok" | "unsupported" | "un
 /**
  * Verify an acknowledgement against the local expectation. Returns problem codes; an empty
  * list means the child loaded the expected model, active ordinary tools and registered
- * passthrough definitions. The expected passthrough subset, never the child's claims,
- * determines which names may be inactive. Every extra active name is still a failure.
+ * native definitions. The expected native subset, never the child's claims, determines
+ * which names may be inactive; native activity itself remains host-owned. Every active
+ * name outside the finalized allowlist is still a failure.
  */
 export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectation): string[] {
   const problems: string[] = [];
@@ -408,6 +406,8 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
     problems.push(`host-version-unsupported:${String(hostVersion).slice(0, 32)}`);
   }
 
+  if (payload.thinking !== undefined && !isThinkingLevel(payload.thinking)) problems.push("thinking-invalid");
+
   const model = payload.model;
   if (!model || typeof model !== "object") {
     problems.push("model-absent");
@@ -417,18 +417,18 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
     if (!provider || !id || `${provider}/${id}` !== expectation.model) problems.push("model-mismatch");
   }
 
-  const expectedPassthrough = expectation.passthroughTools === undefined ? EMPTY_PASSTHROUGH_TOOLS : expectation.passthroughTools;
-  const validPassthrough = isPassthroughToolSubset(expectedPassthrough, expectation.tools);
-  if (!validPassthrough) problems.push("passthrough-expectation-invalid");
-  const passthrough = validPassthrough ? expectedPassthrough : EMPTY_PASSTHROUGH_TOOLS;
-  if (passthrough.length > 0) {
+  const expectedNative = expectation.nativeTools === undefined ? EMPTY_TOOL_NAMES : expectation.nativeTools;
+  const validNative = isToolNameSubset(expectedNative, expectation.tools);
+  if (!validNative) problems.push("native-expectation-invalid");
+  const nativeTools = validNative ? expectedNative : EMPTY_TOOL_NAMES;
+  if (nativeTools.length > 0) {
     // Nonempty metadata requires explicit proof; an older child cannot silently
     // waive registration simply by omitting the new acknowledgement field.
-    if (!isPassthroughToolSubset(payload.registeredPassthroughTools, passthrough)) {
-      problems.push("passthrough-registration-invalid:requires-current-child-proof");
+    if (!isToolNameSubset(payload.registeredNativeTools, nativeTools)) {
+      problems.push("native-registration-invalid:requires-current-child-proof");
     } else {
-      for (const required of passthrough) {
-        if (!payload.registeredPassthroughTools.includes(required)) problems.push(`missing-passthrough-registration:${required}`);
+      for (const required of nativeTools) {
+        if (!payload.registeredNativeTools.includes(required)) problems.push(`missing-native-registration:${required}`);
       }
     }
   }
@@ -440,7 +440,7 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
   } else {
     const active = new Set<string>();
     for (const entry of payload.tools) {
-      if (typeof entry !== "string" || entry.length === 0 || entry.length > MAX_NAME_LENGTH) {
+      if (typeof entry !== "string" || entry.length === 0 || entry.length > MAX_TOOL_NAME_LENGTH) {
         problems.push("tool-name-invalid");
         continue;
       }
@@ -448,7 +448,7 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
       active.add(entry);
     }
     for (const required of expectation.tools) {
-      if (!passthrough.includes(required) && !active.has(required)) problems.push(`missing-tool:${required}`);
+      if (!nativeTools.includes(required) && !active.has(required)) problems.push(`missing-tool:${required}`);
     }
     for (const observed of active) {
       if (!expectation.tools.includes(observed)) problems.push(`unexpected-tool:${observed}`);

@@ -28,7 +28,7 @@ pi install npm:@cr1ms0n/pi-subagent
 
 Jev 会选择模型和工具。可选的 `jevRouting.baseUrl` 可以指向受信任的完整 `https://` SystemOne 请求 URL；省略时仍精确使用官方默认端点 `https://api.typesafe.ai/v1/systemone`。该值会经过严格校验，修改它也会修改接收最小路由披露数据的目标。完整约束见[配置参考](docs/REFERENCE.md#jev-routing)。
 
-需要在 Jev 的普通工具选择之外保留基础设施工具时，可在同一配置文件的顶层设置 `passthroughTools` 字符串数组，默认 `[]`。填写准确的已注册工具名，没有内置预设。这表示你明确信任这些工具不会修改项目文件，也允许它们用于只读 profile；扩展不会自动证明自定义工具的副作用。已知写入工具、不安全的 builtin 和子任务派发工具不能使用这个例外。启动时每个名称都必须有已注册的定义，是否激活则由工具所属的 host 控制。详见 [passthrough 工具配置](docs/REFERENCE.md#passthrough-tools)。
+工具分类直接复用 Pi 0.99.0+ 官方 `ToolExposure` 元数据，不再维护包自己的基础设施名单。active 的 `direct` 工具（包括 direct SDK/自定义工具）是 Jev 的普通候选；`model-only`、`codemode`、`deferred` 定义会自动作为 native managed 工具带入子进程，并要求子进程注册，但是否 active 由 Pi 控制；`hidden` 工具会被排除。没有 exposure 元数据的旧 host 按 Pi 默认的 `direct` 处理。source 元数据只用于来源证明/诊断，annotations 只是作者提示，二者都不是写入安全证明。用户无需为此添加配置。
 
 使用 `/subagents` 查看任务，使用 `/subagent-cost` 查看用量。
 

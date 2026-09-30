@@ -282,6 +282,8 @@ export interface InlineTaskView {
   state?: RunState;
   usage?: Partial<UsageStats>;
   model?: string;
+  thinking?: string;
+  effectiveThinking?: string;
   stopReason?: string;
   timeoutPhase?: TimeoutPhase;
   errorMessage?: string;
@@ -348,6 +350,9 @@ function taskAnnotations(task: InlineTaskView, now: number): string[] {
       ? ` (${task.attemptedModels.slice(0, 3).map((m) => m.split('/').pop() ?? m).join('>')}${task.attemptedModels.length > 3 ? '…' : ''})`
       : '';
     notes.push(`attempt ${task.attempts}${chain}`);
+  }
+  if (task.effectiveThinking && task.effectiveThinking !== task.thinking) {
+    notes.push(`thinking:${task.thinking ?? 'default'}→${task.effectiveThinking}`);
   }
   if (task.stalledSince && isActiveState(task.state)) notes.push(`stalled ${formatDuration(now - task.stalledSince)}`);
   if (!isActiveState(task.state)) {

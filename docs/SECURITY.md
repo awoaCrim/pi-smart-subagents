@@ -10,25 +10,24 @@ and can use tools according to their capability profile.
 |---------|-----------------|---------|
 | `explore` | Jev-chosen subset of locally permitted read-only candidates | No project-file writes |
 | `review` | Same as explore | No project-file writes |
-| `general` | Jev-chosen subset of the full available locally permitted catalog | Yes if write-capable tools are selected |
+| `general` | Jev-chosen subset of the parent's active locally permitted catalog | Yes if write-capable tools are selected |
 
-Parallel mode defaults to `explore` to avoid concurrent shared writes. Each profile may also retain the explicitly trusted infrastructure named in `passthroughTools`; the trust exception and its limitations are described below.
+Parallel mode defaults to `explore` to avoid concurrent shared writes. Tool exposure follows Pi's official metadata: native non-direct definitions are carried for registration without being treated as ordinary profile candidates, while ordinary direct-tool safety remains fail-closed.
 
 ## Hard rules
 
 1. **Read-only means no project-file mutation.** `bash` can rewrite the disk and is never part of
    an explore/review profile. The finalized tools reach the child as Pi's `--tools`
    allowlist (`--no-tools` when empty), and the selector's answer is re-validated
-   locally: unknown, unavailable or unsafe choices cannot launch broader
+   locally: unknown, unavailable, inactive or unsafe choices cannot launch broader
    capability, and an empty selection never becomes "all tools". Pi 0.86.0 is the
    verified baseline for built-in, extension and late-registered tool enforcement;
    a host that cannot honor the allowlist is refused rather than silently weakened.
    Before the real task prompt, a package-local startup check verifies the routing
    bootstrap command source, exact selected model, active ordinary tools and registered
-   passthrough definitions. Only the authorized passthrough subset may be inactive;
-   all active names must be allowed. Missing registration or a mismatch aborts as a
-   capability diagnostic and is never fixed
-   by widening tools, switching models or approving project trust.
+   official native definitions. Native definitions may be host-inactive; all active names
+   must still be in the finalized allowlist. Missing registration or a mismatch aborts as a
+   capability diagnostic and is never fixed by widening tools or switching models.
 2. **Parallel writers** require `isolation: "worktree"`, distinct `cwd` values,
    or an explicit `allow_shared_writes: true` opt-in.
 3. **Depth is capped** (`maxDepth`, default 2). Nested children at the ceiling do
@@ -68,13 +67,13 @@ Parallel mode defaults to `explore` to avoid concurrent shared writes. Each prof
     cost is unreported and outside `max_cost`. Combine with provider account
     budgets for hard spend limits.
 
-## Trusted infrastructure exception
+## Official tool exposure boundary
 
-The optional top-level `passthroughTools: string[]` in `~/.pi/subagent.json` defaults to `[]`. Listing a custom tool explicitly approves it as trusted **non-project-writing infrastructure**, including in explore/review. This is a user trust decision, not automatic proof that arbitrary custom code has no side effects. Review the providing extension before approving it; the extension runs with your OS permissions.
+Pi 0.99.0+ `getAllTools()` metadata is the only classification source for the native boundary. `direct` definitions that are active in the same snapshot are ordinary Jev candidates, including direct SDK/custom tools. `model-only`, `codemode` and `deferred` definitions are native managed tools: the parent carries their registered names automatically, excludes them from Jev's ordinary questions, and requires child registration proof, while Pi controls whether each is active. `hidden` definitions are excluded from both paths. If an older host omits `exposure`, the Pi default `direct` behavior is used; an unknown present exposure value is dropped rather than guessed.
 
-Names must exist in the permitted parent catalog before paid selection and must have registered definitions in the child before task work. The host may leave each registered definition inactive; the startup proof does not force activation or exempt ordinary selected tools from exact activity checks. An old child without registration evidence cannot use the exception. Source/model/nonce/host checks and refusal of extra active tools remain strict.
+`sourceInfo` is retained for provenance and nested-extension attestation only. `annotations`, names and extension source labels never prove that a tool is read-only. Ordinary unknown/custom direct tools remain writer-capable in `general` and are rejected by `explore`/`review` unless they are in the existing conservative read-only set. Native managed tools do not alter ordinary writer classification, and nested `subagent`/`subagent_wait` names remain subject to package depth/spawn policy.
 
-Known writers (`bash`, `edit`, `write`), unsafe unclassified builtins and this package's `subagent`/`subagent_wait` dispatch tools cannot use the list to bypass writer, profile, depth or spawn safeguards. Unlisted custom tools remain conservatively writable, and ordinary selected writers retain the parallel/worktree rules. No tool-effect inference, sandbox, foreign config integration or built-in tool-name preset is supplied.
+The startup proof checks the exact model and ordinary active set, requires every derived native definition to be registered, permits native activity to be absent or present, and rejects active names outside the finalized allowlist. It also retains source/model/nonce/host checks and nested-tool provenance checks. No user-owned whitelist, source-name preset, forced activation, foreign config discovery or annotation-based sandbox exists.
 
 ## Routing disclosure and credentials
 
