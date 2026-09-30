@@ -125,6 +125,9 @@ export interface TaskSpec {
   /** Optional difficulty hint forwarded to the selector as descriptive routing context. */
   difficulty?: TaskDifficulty;
   tools?: string[];
+  /** Internal frozen subset: trusted infrastructure must be registered, but may be host-inactive.
+   * Built by local policy, not a tool-call field or persisted executable policy. */
+  passthroughTools?: readonly string[];
   profile: TaskProfile;
   canWrite?: boolean;
   cwd?: string;

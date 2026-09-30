@@ -32,7 +32,7 @@
 - `maintenance.ts`: filesystem GC (session files) and abort-race helpers; kept out of persistence.
 - `usage.ts`: provider-reported root/subagent/combined accounting, plus a separate
   once-per-request routing-token category whose currency is reported as unreported.
-- `policy.ts` / `schema.ts`: discriminated request validation and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized ordinary tool allowlists are passed to Pi without hidden additions; profile checks still prevent project-file writes in read-only modes.
+- `policy.ts` / `schema.ts`: discriminated request validation and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the ordinary Jev choice plus explicitly configured trusted infrastructure, with no hidden presets. Profile checks reject ordinary writers in read-only modes; custom passthrough safety is explicit user trust, not inferred effects.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
   shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
@@ -48,7 +48,11 @@
   or child arguments. The router has no engine imports and makes no parent UI calls.
 - `config.ts`: defaults ← `~/.pi/subagent.json` ← `PI_SUBAGENT_*` env overrides. Each
   dispatch receives a fresh frozen `jevRouting` snapshot, so a valid `baseUrl` edit affects
-  the next dispatch without mutating an existing router invocation.
+  the next dispatch without mutating an existing router invocation. The optional top-level
+  `passthroughTools` array defaults empty; `passthrough-tools.ts` owns bounded name parsing
+  and strict internal subset checks, not effect classification. Policy validates real parent
+  registration/safety, excludes this frozen subset from ordinary ceilings/selector questions,
+  then merges it once without changing the original decision or writer classification.
 - `structured.ts`: structured-output contract (dependency-free JSON-Schema subset
   validation, fenced json:result extraction, contract/repair prompts) and
   conservative double-encoded-arg repair. The runner gates the child's settle on
@@ -158,9 +162,14 @@ Invariants:
     Startup verification is the enforcement companion: the Pi adapter supplies a
     package-local preflight extension plus a bounded non-secret expectation, verifies that
     the nonce-specific bootstrap command exists from the expected package source, then
-    requires the child to acknowledge the exact selected model and finalized tool names
-    (including nested-tool source) before the real task prompt is sent. Missing or
-    mismatched acknowledgement is a capability/startup diagnostic, never compensated by broadening tools or choosing another model. Every ranked replacement gets its own exact-model/shared-tools acknowledgement before the task prompt.
+    requires the child to acknowledge the exact selected model, active ordinary tools and
+    registered definitions for the locally expected passthrough subset (including the existing
+    nested-tool source check) before the real task prompt is sent. Only that configured subset
+    may be host-inactive; every active name must be allowed. The internal task/manifest subset
+    must agree, and nonempty passthrough requires explicit bounded registration proof. It is
+    not a caller field, per-model tool plan or persisted executable policy. No forced activation,
+    name/group preset, foreign config or indefinite activation wait is introduced. Missing or
+    mismatched acknowledgement is a capability/startup diagnostic, never compensated by broadening tools or choosing another model. Every ranked replacement gets fresh attestation against the same allowed/passthrough sets before the task prompt. Empty/absent passthrough retains exact-active verification and the ordinary-only SDK path.
 31. An absolute task deadline is created before preflight/selection, and routing, setup,
     queue and retries all count against it. Pending selector work is tracked per session
     runtime, aborted on cancellation, shutdown or session switch, and every post-await

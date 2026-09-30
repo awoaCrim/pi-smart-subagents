@@ -23,8 +23,7 @@ import {
   type PreflightManifest,
 } from "../startup-check.js";
 
-/** Nested dispatch tools whose loaded source the startup check must verify. */
-const NESTED_DISPATCH_TOOLS = ["subagent", "subagent_wait"] as const;
+import { EMPTY_PASSTHROUGH_TOOLS, NESTED_DISPATCH_TOOLS, isPassthroughToolSubset } from "../passthrough-tools.js";
 
 const PI_CAPABILITIES: BackendCapabilities = {
   steer: true,
@@ -46,6 +45,13 @@ export class PiBackend implements BackendAdapter {
     // prompt: Pi silently drops unknown `--tools` names, so parent catalog knowledge is
     // not proof of what the child actually loaded.
     const routed = spec.routing !== undefined;
+    const passthrough = spec.passthroughTools === undefined ? EMPTY_PASSTHROUGH_TOOLS : spec.passthroughTools;
+    if (!isPassthroughToolSubset(passthrough, spec.tools ?? []) || (!routed && passthrough.length > 0)) {
+      throw startupFailure(
+        "passthrough_tools_invalid",
+        "passthroughTools requires a normalized subset of a routed tool allowlist and registered-definition attestation; prepare the task through local routing policy.",
+      );
+    }
     if (routed) {
       if (!spec.model?.trim()) {
         throw startupFailure(
@@ -119,6 +125,7 @@ export class PiBackend implements BackendAdapter {
         nonce: createPreflightNonce(),
         model: spec.model!,
         tools: toolList ?? [],
+        ...(passthrough.length > 0 ? { passthroughTools: passthrough } : {}),
         ...(nestedTools.length > 0 ? { nestedTools } : {}),
       };
       const tempPreflightDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-subagent-preflight-"));

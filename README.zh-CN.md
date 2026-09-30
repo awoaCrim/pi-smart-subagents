@@ -28,6 +28,8 @@ pi install npm:@cr1ms0n/pi-subagent
 
 Jev 会选择模型和工具。可选的 `jevRouting.baseUrl` 可以指向受信任的完整 `https://` SystemOne 请求 URL；省略时仍精确使用官方默认端点 `https://api.typesafe.ai/v1/systemone`。该值会经过严格校验，修改它也会修改接收最小路由披露数据的目标。完整约束见[配置参考](docs/REFERENCE.md#jev-routing)。
 
+需要在 Jev 的普通工具选择之外保留基础设施工具时，可在同一配置文件的顶层设置 `passthroughTools` 字符串数组，默认 `[]`。填写准确的已注册工具名，没有内置预设。这表示你明确信任这些工具不会修改项目文件，也允许它们用于只读 profile；扩展不会自动证明自定义工具的副作用。已知写入工具、不安全的 builtin 和子任务派发工具不能使用这个例外。启动时每个名称都必须有已注册的定义，是否激活则由工具所属的 host 控制。详见 [passthrough 工具配置](docs/REFERENCE.md#passthrough-tools)。
+
 使用 `/subagents` 查看任务，使用 `/subagent-cost` 查看用量。
 
 并行任务、后台执行、工作树和结构化结果见[使用参考](docs/REFERENCE.md#quick-usage)，键盘操作见 [TUI 指南](docs/UX.md)。
@@ -39,6 +41,6 @@ Jev 会选择模型和工具。可选的 `jevRouting.baseUrl` 可以指向受信
 
 [MIT](LICENSE)。Copyright (c) 2026 Luke Parke。社区分支由 cr1ms0n（awoaCrim）维护。重新分发时请保留原始版权声明和许可证。
 
-译自 [README.md](README.md)，英文文件 blob：`281eb7da693634a61cfb04ee4bc72165fd2de609`。中英文内容如有差异，以英文为准。
+译自 [README.md](README.md)，英文文件 blob：`00343e888177a035b323552ce53e1f4aa17cb0ad`。中英文内容如有差异，以英文为准。
 
 感谢 [Linux.do](https://linux.do/)。

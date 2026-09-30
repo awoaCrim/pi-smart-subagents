@@ -12,7 +12,7 @@ and can use tools according to their capability profile.
 | `review` | Same as explore | No project-file writes |
 | `general` | Jev-chosen subset of the full available locally permitted catalog | Yes if write-capable tools are selected |
 
-Parallel mode defaults to `explore` to avoid concurrent shared writes.
+Parallel mode defaults to `explore` to avoid concurrent shared writes. Each profile may also retain the explicitly trusted infrastructure named in `passthroughTools`; the trust exception and its limitations are described below.
 
 ## Hard rules
 
@@ -24,8 +24,10 @@ Parallel mode defaults to `explore` to avoid concurrent shared writes.
    verified baseline for built-in, extension and late-registered tool enforcement;
    a host that cannot honor the allowlist is refused rather than silently weakened.
    Before the real task prompt, a package-local startup check verifies the routing
-   bootstrap command source and has the child acknowledge the exact selected model
-   and tool names; a mismatch aborts as a capability diagnostic and is never fixed
+   bootstrap command source, exact selected model, active ordinary tools and registered
+   passthrough definitions. Only the authorized passthrough subset may be inactive;
+   all active names must be allowed. Missing registration or a mismatch aborts as a
+   capability diagnostic and is never fixed
    by widening tools, switching models or approving project trust.
 2. **Parallel writers** require `isolation: "worktree"`, distinct `cwd` values,
    or an explicit `allow_shared_writes: true` opt-in.
@@ -65,6 +67,14 @@ Parallel mode defaults to `explore` to avoid concurrent shared writes.
     execution cost only: TypeSafe reports routing tokens, not currency, so selector
     cost is unreported and outside `max_cost`. Combine with provider account
     budgets for hard spend limits.
+
+## Trusted infrastructure exception
+
+The optional top-level `passthroughTools: string[]` in `~/.pi/subagent.json` defaults to `[]`. Listing a custom tool explicitly approves it as trusted **non-project-writing infrastructure**, including in explore/review. This is a user trust decision, not automatic proof that arbitrary custom code has no side effects. Review the providing extension before approving it; the extension runs with your OS permissions.
+
+Names must exist in the permitted parent catalog before paid selection and must have registered definitions in the child before task work. The host may leave each registered definition inactive; the startup proof does not force activation or exempt ordinary selected tools from exact activity checks. An old child without registration evidence cannot use the exception. Source/model/nonce/host checks and refusal of extra active tools remain strict.
+
+Known writers (`bash`, `edit`, `write`), unsafe unclassified builtins and this package's `subagent`/`subagent_wait` dispatch tools cannot use the list to bypass writer, profile, depth or spawn safeguards. Unlisted custom tools remain conservatively writable, and ordinary selected writers retain the parallel/worktree rules. No tool-effect inference, sandbox, foreign config integration or built-in tool-name preset is supplied.
 
 ## Routing disclosure and credentials
 

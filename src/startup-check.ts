@@ -2,7 +2,8 @@
  * Pi child startup-handshake contract for Jev-routed subagent tasks.
  *
  * A routed dispatch must prove *before* the real task prompt reaches the child that the
- * child actually loaded the expected execution model and exactly the finalized tool set.
+ * child actually loaded the expected execution model, active ordinary tools and registered
+ * passthrough definitions. Only the locally expected passthrough subset may be inactive.
  * Parent-side catalog knowledge is not proof: Pi silently drops unknown `--tools` names,
  * and a child may load a different (possibly older) copy of this package, whose nested
  * `subagent` tool would bypass routing entirely.
@@ -27,6 +28,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { EMPTY_PASSTHROUGH_TOOLS, isPassthroughToolSubset } from "./passthrough-tools.js";
 
 /** Custom-message type of the child-side acknowledgement. */
 export const PREFLIGHT_ACK_TYPE = "pi-subagent-preflight-ack";
@@ -65,8 +67,10 @@ export interface PreflightManifest {
   readonly nonce: string;
   /** Exact `provider/modelId` the child must have active. */
   readonly model: string;
-  /** Exact finalized active tool set (Jev selection + mandatory local controls). */
+  /** Finalized allowlist (ordinary Jev selection + configured infrastructure). */
   readonly tools: readonly string[];
+  /** Locally authorized registered definitions whose activation is host-owned. */
+  readonly passthroughTools?: readonly string[];
   /** Nested dispatch tools whose loaded source must be this package's extension entry. */
   readonly nestedTools?: readonly string[];
 }
@@ -76,6 +80,7 @@ export interface PreflightExpectation {
   readonly nonce: string;
   readonly model: string;
   readonly tools: readonly string[];
+  readonly passthroughTools?: readonly string[];
   readonly nestedTools?: readonly string[];
   /** Expected own extension entry paths; defaults to the current package's entries. */
   readonly ownEntryPaths?: readonly string[];
@@ -95,6 +100,7 @@ export interface PreflightAckPayload {
   readonly nonce?: unknown;
   readonly model?: { provider?: unknown; id?: unknown } | null;
   readonly tools?: unknown;
+  readonly registeredPassthroughTools?: unknown;
   readonly nestedToolsWithSource?: unknown;
   readonly host?: { version?: unknown } | null;
 }
@@ -237,6 +243,10 @@ export function parsePreflightManifest(raw: unknown): PreflightManifestParse {
   if (!tools) {
     return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried no usable tool list." };
   }
+  const passthroughTools = parsed.passthroughTools;
+  if (passthroughTools !== undefined && !isPassthroughToolSubset(passthroughTools, tools)) {
+    return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried an unusable passthrough subset." };
+  }
   let nestedTools: string[] | undefined;
   if (parsed.nestedTools !== undefined) {
     nestedTools = readNameList(parsed.nestedTools, MAX_ACK_NESTED) ?? undefined;
@@ -246,7 +256,9 @@ export function parsePreflightManifest(raw: unknown): PreflightManifestParse {
   }
   return {
     ok: true,
-    manifest: { schema: PREFLIGHT_MANIFEST_SCHEMA, nonce: parsed.nonce, model: parsed.model, tools, nestedTools },
+    manifest: { schema: PREFLIGHT_MANIFEST_SCHEMA, nonce: parsed.nonce, model: parsed.model, tools, nestedTools,
+      ...(passthroughTools === undefined ? {} : { passthroughTools }),
+    },
   };
 }
 
@@ -257,7 +269,7 @@ function readNameList(value: unknown, maxCount: number): string[] | null {
     if (typeof entry !== "string" || entry.length === 0 || entry.length > MAX_NAME_LENGTH) return null;
     out.push(entry);
   }
-  return out;
+  return new Set(out).size === out.length ? out : null;
 }
 
 export interface ResolvedPreflightCommand {
@@ -380,11 +392,9 @@ export function compareHostVersion(version: unknown): "ok" | "unsupported" | "un
 
 /**
  * Verify an acknowledgement against the local expectation. Returns problem codes; an empty
- * list means the child provably loaded the expected model and the exact expected tools.
- *
- * The child's own claims are never trusted for authority: every required tool must be
- * reported active, and any extra active tool is a failure (a silently broadened child is
- * exactly what this check exists to catch).
+ * list means the child loaded the expected model, active ordinary tools and registered
+ * passthrough definitions. The expected passthrough subset, never the child's claims,
+ * determines which names may be inactive. Every extra active name is still a failure.
  */
 export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectation): string[] {
   const problems: string[] = [];
@@ -407,6 +417,22 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
     if (!provider || !id || `${provider}/${id}` !== expectation.model) problems.push("model-mismatch");
   }
 
+  const expectedPassthrough = expectation.passthroughTools === undefined ? EMPTY_PASSTHROUGH_TOOLS : expectation.passthroughTools;
+  const validPassthrough = isPassthroughToolSubset(expectedPassthrough, expectation.tools);
+  if (!validPassthrough) problems.push("passthrough-expectation-invalid");
+  const passthrough = validPassthrough ? expectedPassthrough : EMPTY_PASSTHROUGH_TOOLS;
+  if (passthrough.length > 0) {
+    // Nonempty metadata requires explicit proof; an older child cannot silently
+    // waive registration simply by omitting the new acknowledgement field.
+    if (!isPassthroughToolSubset(payload.registeredPassthroughTools, passthrough)) {
+      problems.push("passthrough-registration-invalid:requires-current-child-proof");
+    } else {
+      for (const required of passthrough) {
+        if (!payload.registeredPassthroughTools.includes(required)) problems.push(`missing-passthrough-registration:${required}`);
+      }
+    }
+  }
+
   if (!Array.isArray(payload.tools)) {
     problems.push("tools-not-array");
   } else if (payload.tools.length > MAX_ACK_TOOLS) {
@@ -422,7 +448,7 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
       active.add(entry);
     }
     for (const required of expectation.tools) {
-      if (!active.has(required)) problems.push(`missing-tool:${required}`);
+      if (!passthrough.includes(required) && !active.has(required)) problems.push(`missing-tool:${required}`);
     }
     for (const observed of active) {
       if (!expectation.tools.includes(observed)) problems.push(`unexpected-tool:${observed}`);

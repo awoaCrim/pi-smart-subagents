@@ -247,9 +247,9 @@ ignored.
 | `review`                     | same as explore                                         | no project-file writes                      |
 | `general`                    | Jev chooses from the full available locally permitted catalog | yes for selected write-capable tools; unknown custom tools count as writable |
 
-Jev chooses individual tool names, not a capability bundle. Candidates come from the full available locally permitted catalog, not from the agent file's `tools` defaults and not from the parent's currently active tools. An explicit task `tools` list is a ceiling, and explore/review keep their read-only rule regardless of what the selector returns. An empty selection never means "all tools".
+Jev chooses individual tool names, not a capability bundle. Candidates come from the full available locally permitted catalog, not from the agent file's `tools` defaults and not from the parent's currently active tools. An explicit task `tools` list is an ordinary candidate ceiling, and explore/review keep their read-only rule regardless of what the selector returns. Configured trusted `passthroughTools` are preserved separately under the trust boundary below; they are not selector questions. An empty ordinary selection never means "all tools".
 
-The finalized tool set is passed to the child as Pi's `--tools` allowlist (`--no-tools` for a true empty set). Pi 0.86.0 is the verified baseline for built-in, extension and late-registered tool enforcement; a host that cannot honor that allowlist is refused rather than silently weakened, and the extension does not claim identical behavior on untested older releases. Before the real task prompt is sent, the child is also asked to confirm the selected model and the finalized tool names through a verified private startup command; if the host cannot verify that command or the child cannot confirm both, the launch aborts with a startup diagnostic instead of running with a broader tool set.
+The finalized tool set is passed to the child as Pi's `--tools` allowlist (`--no-tools` for a true empty set). Pi 0.86.0 is the verified baseline for built-in, extension and late-registered tool enforcement; a host that cannot honor that allowlist is refused rather than silently weakened, and the extension does not claim identical behavior on untested older releases. Before the real task prompt is sent, a verified private startup command must confirm the selected model, exact active ordinary tools and registered passthrough definitions. Only the parent-authorized passthrough subset may be inactive; all active names must be allowed. Missing registration, duplicate/malformed evidence, an unexpected active tool, or a source/model/nonce mismatch aborts with a startup diagnostic instead of running with a broader tool set. An older child without passthrough registration proof is refused when the list is nonempty.
 
 Parallel write-capable tasks sharing one checkout are rejected unless each uses `isolation: "worktree"`, distinct `cwd`, or explicit `allow_shared_writes: true`.
 
@@ -257,10 +257,11 @@ Parallel write-capable tasks sharing one checkout are rejected unless each uses 
 
 ### Configuration
 
-Defaults can be overridden in `~/.pi/subagent.json` and per-field via env vars (env wins over file):
+Defaults can be overridden in `~/.pi/subagent.json`; runtime fields with an env var below also support env overrides (env wins over file):
 
 | Setting                 | Env var                               | Default                               |
 | ----------------------- | ------------------------------------- | ------------------------------------- |
+| `passthroughTools`      | none (config file only)              | `[]`                                  |
 | `maxTasksPerRun`        | `PI_SUBAGENT_MAX_TASKS`               | 8                                     |
 | `maxActiveProcesses`    | `PI_SUBAGENT_MAX_ACTIVE`              | 4                                     |
 | `maxQueuedTasks`        | `PI_SUBAGENT_MAX_QUEUED`              | 32                                    |
@@ -283,6 +284,25 @@ Defaults can be overridden in `~/.pi/subagent.json` and per-field via env vars (
 | `widget`                | `PI_SUBAGENT_WIDGET`                  | `background` (`off` disables)         |
 | `notifications`         | `PI_SUBAGENT_NOTIFICATIONS`           | `batched` (`off` disables)            |
 | (bin)                   | `PI_SUBAGENT_BIN`                     | auto (`process.execPath` + CLI entry) |
+
+<a id="passthrough-tools"></a>
+#### Passthrough tools
+
+Add an optional top-level string array alongside `jevRouting` in the same `~/.pi/subagent.json` file:
+
+```json
+{
+  "passthroughTools": ["runtime_control", "session_store"]
+}
+```
+
+These are illustrative names, not presets; use the actual registered names of infrastructure you trust. The default is `[]`. Names are case-sensitive, trimmed and deduplicated in first-occurrence order. The array accepts at most 256 entries, each normalized name at most 256 characters; objects, non-strings, blanks, embedded whitespace/control characters, commas and wildcard patterns are rejected. No environment override, caller field, effect/activation attributes or foreign-extension config discovery exists. Malformed config or unavailable/disallowed names reject new work before paid selection; existing-run management remains available.
+
+The list is **explicit user approval of trusted non-project-writing infrastructure**, including under `explore` and `review`. The host cannot infer a custom tool's effects from its name or registration. Known writers (`bash`, `edit`, `write`), unclassified unsafe builtins and this package's nested-dispatch tools (`subagent`, `subagent_wait`) cannot become infrastructure through list membership. Unlisted custom tools retain conservative writer classification; ordinary writers still require the existing parallel/worktree safeguards. Profiles are tool policy, not an OS sandbox.
+
+Listed definitions must be registered in both parent and child. They are omitted from ordinary selector choices, survive a caller `tools:["read"]` or `tools:[]` ceiling and selector exclusions, and are appended once to the ordinary selected subset. An empty selection can therefore produce a passthrough-only allowlist, never all tools. The original route's `selectedTools` remains the ordinary choice. Plan, single/parallel tasks, resume/fork, `/btw`, optional synthesis and ranked replacements share this boundary; the invocation uses one frozen list, and config edits affect later invocations only.
+
+The child proves registration separately from activity. Each configured definition may be active or host-inactive at startup; the extension does not force activation, wait indefinitely, or assume a group size. Ordinary selected tools must be active, and every active name must be in the final allowlist. Missing registration or unusable proof is a non-transient startup failure, not permission to drop a name, broaden capabilities or try another model. With the list omitted/empty, the existing exact-active startup and ordinary-only SDK behavior is unchanged. The low-level SDK does not discover this config or implicitly trust names; nonempty internal passthrough metadata requires routed attestation.
 
 #### Jev routing
 
@@ -336,7 +356,7 @@ Version `0.11.0` adds this behavior. Published `0.10.0` retries the selected mod
 
 TypeSafe's Choice response includes a probability for every eligible option. The extension retains that distribution and tries higher-probability candidates first. These values express the selector's preference, not measured model uptime or success rates. The separate `confidence` value belongs to the original answer. A tied maximum keeps Jev's returned choice first; other ties follow configured candidate order. Low or zero probability is not a new exclusion threshold.
 
-Jev selects one task-based tool subset, independent of the first execution model, for every attempt. The initial logical selection may use several HTTP batches; failover adds none. Each candidate still gets its own thinking default under the existing precedence and fresh exact-model/tool startup verification. An attestation mismatch stops the task instead of trying a broader capability set.
+Jev selects one task-based tool subset, independent of the first execution model, for every attempt. The initial logical selection may use several HTTP batches; failover adds none. Each candidate still gets its own thinking default under the existing precedence and fresh model/ordinary-active/passthrough-registered startup verification. An attestation mismatch stops the task instead of trying a broader capability set.
 
 Switching requires a settled provider error and conclusive evidence that no tool execution has begun in this invocation. Recognized cases include an explicitly unavailable model, temporary throttling, service overload and identifiable transport failures. Authentication/configuration errors, quota or billing exhaustion, invalid requests, context limits, refusals, poor answers, schema failures, cancellation and exhausted budgets do not trigger a model switch. Recognition uses only the latest completed assistant error's bounded message and documented primitive `diagnostics.error.code`, never ordinary answer text or arbitrary diagnostic details. Authentication, quota and other excluded evidence take precedence over an availability code. Unfamiliar error formats stop conservatively. A tool-start event blocks restart even when no result arrived; missing or malformed protocol evidence is not permission to retry. Historical tool messages in a resumed or forked session are not new execution.
 

@@ -11,6 +11,7 @@ import { resolveBackend } from "./backends/index.js";
 import { validateModelRanking } from "./model-failover.js";
 import type { JevRoutingConfig, RoutingDecision, RoutingModelCandidate } from "./routing-types.js";
 import { isThinkingLevel } from "./thinking.js";
+import { EMPTY_PASSTHROUGH_TOOLS, NESTED_DISPATCH_TOOLS, isPassthroughToolSubset, parsePassthroughTools } from "./passthrough-tools.js";
 
 export const DEPTH_ENV_VAR = "PI_SUBAGENT_DEPTH";
 export const SPAWNS_ENV_VAR = "PI_SUBAGENT_SPAWNS";
@@ -40,6 +41,8 @@ export interface ParentContext {
   thinking?: TaskSpec["thinking"];
   availableTools: string[];
   activeTools?: string[];
+  /** Names identified as builtins by the real host registry (not description heuristics). */
+  builtinTools?: string[];
   depth?: number;
   /** Persisted parent session file; required for context:'fork'. */
   sessionFile?: string;
@@ -68,6 +71,8 @@ export interface PreparationOptions {
   agents?: Map<string, AgentDefinition>;
   jevRouting?: JevRoutingConfig;
   jevRoutingError?: string;
+  passthroughTools?: readonly string[];
+  passthroughToolsError?: string;
 }
 
 export type ManagementMode = "status" | "wait" | "cancel" | "steer" | "diff" | "apply" | "discard";
@@ -219,8 +224,24 @@ function normalizeTask(
   const childDepth = (parent.depth ?? parseDepth()) + 1;
   const nestedAllowed = profile === "general" && childDepth < (defaults.maxDepth ?? defaultConfig.maxDepth)
     && agent?.spawns !== false && (!Array.isArray(agent?.spawns) || agent.spawns.length > 0);
-  const availableTools = parent.availableTools.filter((tool) => nestedAllowed || !["subagent", "subagent_wait"].includes(tool));
-  const resolved = resolveTools(profile, requestedTools, availableTools);
+  const availableTools = parent.availableTools.filter((tool) => nestedAllowed || !NESTED_DISPATCH_TOOLS.includes(tool));
+  const passthrough = defaults.passthroughTools ?? EMPTY_PASSTHROUGH_TOOLS;
+  for (const tool of passthrough) {
+    if (KNOWN_WRITE_TOOLS.has(tool) || NESTED_DISPATCH_TOOLS.includes(tool)
+      || (parent.builtinTools?.includes(tool) && !NON_WRITING_TOOLS.has(tool))) {
+      return { error: `Task ${index + 1}: passthroughTools cannot trust writable, unsafe builtin or nested-dispatch tool ${tool}; remove it from the infrastructure list.` };
+    }
+    if (!availableTools.includes(tool)) {
+      return { error: `Task ${index + 1}: passthroughTools requires registered tool ${tool}, but it is unavailable after local permission checks. Fix the name or load its extension.` };
+    }
+  }
+  // Check caller names before separating infrastructure. A typo must not disappear
+  // merely because ordinary tools are later filtered for a read-only profile.
+  const unavailable = requestedTools?.filter((tool) => !availableTools.includes(tool));
+  if (unavailable?.length) return { error: `Task ${index + 1}: Unknown or unavailable tools: ${unavailable.join(", ")}` };
+  const ordinaryAvailable = availableTools.filter((tool) => !passthrough.includes(tool));
+  const ordinaryRequested = requestedTools?.filter((tool) => !passthrough.includes(tool));
+  const resolved = resolveTools(profile, ordinaryRequested, ordinaryAvailable);
   if (resolved.error || !resolved.tools || resolved.canWrite === undefined) return { error: resolved.error ?? "Tool resolution failed" };
   const cwd = resolvePath(parent.cwd, item.cwd);
   const output = item.output ? resolvePath(cwd, item.output) : undefined;
@@ -275,6 +296,7 @@ function normalizeTask(
       thinking: requestedThinking,
       difficulty,
       candidateTools: resolved.tools,
+      ...(passthrough.length ? { passthroughTools: passthrough } : {}),
       profile,
       cwd,
       timeoutMs: item.timeout_ms ?? agent?.timeoutMs ?? profileDefaults.timeoutMs ?? defaults.defaultTimeoutMs ?? defaultConfig.defaultTimeoutMs,
@@ -303,6 +325,7 @@ function normalizeTask(
 
         ...(agent ? [`agent=${agent.name}`] : []),
         "routing=jev (pending)",
+        ...(passthrough.length ? [`passthroughTools=[${passthrough.join(",")}] (trusted infrastructure; registration required)`] : []),
       ],
     },
   };
@@ -391,7 +414,6 @@ export function validateSubagentRequest(
   parent: ParentContext,
   options: PreparationOptions = {},
 ): ValidationResult {
-  const defaults = options;
   const hasAction = params.action !== undefined;
   const hasTask = typeof params.task === "string";
   const hasTasks = Array.isArray(params.tasks);
@@ -436,6 +458,10 @@ export function validateSubagentRequest(
   const maxDepth = options.maxDepth ?? defaultConfig.maxDepth;
   if (depth >= maxDepth) return { ok: false, error: `Subagent nesting depth limit reached (${depth} >= ${maxDepth})` };
   if (!options.jevRouting) return { ok: false, error: options.jevRoutingError ?? "Jev routing is not configured. Add jevRouting.models with exact IDs and descriptions to ~/.pi/subagent.json; existing-run management remains available." };
+  if (options.passthroughToolsError) return { ok: false, error: options.passthroughToolsError };
+  const passthrough = parsePassthroughTools(options.passthroughTools);
+  if (!passthrough.ok) return { ok: false, error: passthrough.error };
+  const defaults: PreparationOptions = { ...options, passthroughTools: passthrough.tools };
   // Boot spawn policy (from our parent) — fail closed; applies to new spawn modes only.
   const spawnPolicy = parseSpawnPolicy(process.env[SPAWNS_ENV_VAR]);
   if (spawnPolicy.kind !== "unrestricted") {
@@ -526,8 +552,16 @@ export function finalizeRoutedTasks(
     if (new Set(decision.selectedTools).size !== decision.selectedTools.length || decision.selectedTools.some((tool) => !item.candidateTools.includes(tool))) {
       return { ok: false, error: `Task ${index + 1}: selector chose tools outside the locally permitted candidates.` };
     }
-    const tools = [...new Set(decision.selectedTools)];
-    const canWrite = tools.some((tool) => !NON_WRITING_TOOLS.has(tool));
+    const passthrough = item.passthroughTools === undefined ? EMPTY_PASSTHROUGH_TOOLS : item.passthroughTools;
+    if (!isPassthroughToolSubset(passthrough, passthrough)
+      || passthrough.some((tool) => KNOWN_WRITE_TOOLS.has(tool) || NESTED_DISPATCH_TOOLS.includes(tool) || item.candidateTools.includes(tool))) {
+      return { ok: false, error: `Task ${index + 1}: invalid locally prepared passthroughTools; prepare the task again.` };
+    }
+    const tools = [...decision.selectedTools, ...passthrough];
+    Object.freeze(tools);
+    // Trust applies only to the locally prepared infrastructure subset. Ordinary
+    // unknown tools still count as writers; the original selector choice is intact.
+    const canWrite = decision.selectedTools.some((tool) => !NON_WRITING_TOOLS.has(tool));
     if (item.profile !== "general" && canWrite) return { ok: false, error: `Task ${index + 1}: writable selector choice violates ${item.profile}.` };
     // The probability ranking is mandatory for every new route: without it there
     // is no failover plan, and a persisted/legacy decision shape must never be
