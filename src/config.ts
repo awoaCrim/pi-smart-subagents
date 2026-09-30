@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { TaskProfile } from "./types.js";
 import { JEV_ROUTING_CONFIG_FILE, parseJevRouting, type JevRoutingConfig } from "./routing-policy.js";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.js";
+import { EMPTY_PASSTHROUGH_TOOLS, parsePassthroughTools } from "./passthrough-tools.js";
 
 export type { ThinkingLevel } from "./thinking.js";
 
@@ -65,6 +66,10 @@ export interface SubagentConfig {
   jevRouting?: JevRoutingConfig;
   /** Safe migration or parse failure; existing-run management remains available. */
   jevRoutingError?: string;
+  /** Explicitly trusted non-project-writing infrastructure, outside ordinary selector choices. */
+  passthroughTools: readonly string[];
+  /** Safe whitelist parse failure; new work refuses, management remains available. */
+  passthroughToolsError?: string;
   /**
    * Wrap-up grace turns after a max_turns/max_cost breach: the child is steered
    * to produce a final answer and given this many extra turns before SIGTERM.
@@ -90,6 +95,7 @@ export interface SubagentConfig {
 }
 
 export const defaultConfig: SubagentConfig = {
+  passthroughTools: EMPTY_PASSTHROUGH_TOOLS,
   maxTasksPerRun: 8,
   maxActiveProcesses: 4,
   maxQueuedTasks: 32,
@@ -181,9 +187,12 @@ export function sanitizeConfigOverrides(raw: unknown, source = JEV_ROUTING_CONFI
       jevRoutingError = error instanceof Error ? error.message : "Invalid jevRouting configuration.";
     }
   }
+  const passthrough = parsePassthroughTools(value.passthroughTools);
   return prune<SubagentConfig>({
     jevRouting,
     jevRoutingError,
+    passthroughTools: passthrough.ok ? passthrough.tools : undefined,
+    passthroughToolsError: passthrough.ok ? undefined : passthrough.error,
     taskDefaults: sanitizeTaskDefaultsByProfile(value.taskDefaults),
     maxTasksPerRun: positiveNumber(value.maxTasksPerRun),
     maxActiveProcesses: positiveNumber(value.maxActiveProcesses),
@@ -243,7 +252,7 @@ export function loadConfig(
   return { ...defaultConfig, ...prune(fileOverrides), ...configFromEnv(env) };
 }
 
-/** Read + sanitize the optional user config file. Missing or invalid files yield {}. */
+/** Read + sanitize own user config. Missing is optional; broken JSON blocks new routing safely. */
 export async function readConfigFile(file = CONFIG_FILE): Promise<Partial<SubagentConfig>> {
   try {
     return sanitizeConfigOverrides(JSON.parse(await fs.readFile(file, "utf8")), file);

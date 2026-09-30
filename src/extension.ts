@@ -520,7 +520,7 @@ function guidelines(catalog?: Map<string, AgentDefinition>): string[] {
     "Prefer agent:'<name>' when a named agent matches the task — its persona prompt is usually better than an improvised one. Compose fields manually only when no agent fits.",
     "Give every task a short description label (3-5 words) so runs are scannable in UIs and result indexes.",
     "Set difficulty on every new task so Jev can weigh scope and reasoning demand: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Choose the lowest truthful level; difficulty is descriptive routing context, not a fixed model tier or permission change.",
-    "Profiles: explore/review are strictly read-only (safe for fanout); general offers the full available locally permitted catalog to Jev and may write. Explicit tools are a ceiling; agent tool defaults do not narrow candidates. Single tasks default to general, parallel tasks to explore.",
+    "Profiles: explore/review reject ordinary write-capable tools; general offers the full available locally permitted catalog to Jev and may write. Explicit tools are an ordinary ceiling; agent tool defaults do not narrow candidates. User-configured passthroughTools are separately trusted non-project-writing infrastructure (not inferred effects or a sandbox), never known writer/unsafe builtin/nested-dispatch exemptions. They must be registered but may be host-inactive; ordinary selected tools must be active. Single tasks default to general, parallel tasks to explore.",
     "Parallel writers need isolation:'worktree' (each gets an isolated checkout; changed work lands on a branch). After a worktree run finishes, use action:'diff' to inspect, then 'apply' to bring changes into the main checkout or 'discard' to drop them.",
     "Set budgets: at max_turns/max_cost the child is steered to wrap up and given grace turns for a final answer (grace_turns tunes this); results end as 'partial' with wrappedUp:true when the child concluded. timeout_ms includes Jev selection, setup, queue and retries; max_cost excludes unreported TypeSafe currency; timeout results report the phase.",
     "Transient child failures may retry within the same invocation: ranked Jev routes advance to the next probability-ranked candidate only for a recognized model-availability failure that settles before any tool execution, sharing one task-based tool set and the total max_retries attempt budget (0 = first attempt only; never wraps back). A tool that started, uncertain evidence, or auth/quota/context/schema failures stop without switching. No selector retries or emergency models are used. Task-quality failures never retry.",
@@ -1247,6 +1247,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         cwd: ctx.cwd,
         thinking: management ? undefined : pi.getThinkingLevel() as TaskSpec["thinking"],
         availableTools: parentTools.map((tool) => tool.name),
+        builtinTools: parentTools.filter((tool) => tool.sourceInfo?.source === "builtin").map((tool) => tool.name),
         depth: runtime.depth,
         sessionFile: ctx.sessionManager.getSessionFile() ?? undefined,
       };
@@ -1258,6 +1259,8 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         agents: management ? undefined : agentCatalog(runtime),
         jevRouting: dispatchConfig.jevRouting,
         jevRoutingError: dispatchConfig.jevRoutingError,
+        passthroughTools: dispatchConfig.passthroughTools,
+        passthroughToolsError: dispatchConfig.passthroughToolsError,
       };
       const validated = validateSubagentRequest(params, parent, preparation);
       if (!validated.ok) fail(validated.error);

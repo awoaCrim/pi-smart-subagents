@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.6 — 2026-09-30
+
+### Generic passthrough infrastructure tools
+
+- Add optional top-level `passthroughTools: string[]`, empty by default, in the existing user config. Validate real registered names and preserve explicitly trusted non-project-writing infrastructure outside ordinary caller ceilings and Jev tool questions.
+- Keep known writer, unsafe builtin and nested-dispatch safeguards; custom-tool safety remains explicit user trust, not effect inference or sandboxing.
+- Require bounded child registration proof while allowing each configured definition to be host-inactive. Preserve exact ordinary activity, source/model/nonce/host checks, shared ranked tools and original selector metadata, without forced activation or retry/accounting changes.
+
 ## 0.11.5 — 2026-09-29
 
 ### Synchronized TUI diagnostics and adaptive overlay details

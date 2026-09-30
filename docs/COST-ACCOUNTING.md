@@ -44,7 +44,7 @@ own record, and all of them count once by full request ID. Plan selections and
 pre-spawn failures are included, because no child run exists to carry them.
 
 Successful route metadata (decision ID, selector model and reported version(s),
-original selected model, ranked candidate probabilities, shared selected tools, locally added control-plane tools, confidence, success outcome, latency and receipt IDs) travels with the run and both registry projections. Actual attempt models are recorded separately; fallback never rewrites the initial selection as a new decision. Per-request failure outcomes and safe error codes stay in selector receipts. It carries no descriptions, raw request bodies, headers,
+original selected model, ranked candidate probabilities, shared ordinary selected tools, confidence, success outcome, latency and receipt IDs) travels with the run and both registry projections. Configured passthrough infrastructure is execution metadata, not an extra selector choice or a persisted executable policy. Actual attempt models are recorded separately; fallback never rewrites the initial selection as a new decision. Per-request failure outcomes and safe error codes stay in selector receipts. It carries no descriptions, raw request bodies, headers,
 credentials or invented rationale.
 
 Receipts pending append visibility remain in a bounded session-local overlay until the

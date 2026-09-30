@@ -14,6 +14,7 @@ import { addUsage } from "./usage.js";
 import { ProtocolParser, type ProtocolUpdate } from "./protocol.js";
 import { Semaphore } from "./semaphore.js";
 import { defaultConfig } from "./config.js";
+import { isPassthroughToolSubset } from "./passthrough-tools.js";
 import { DEPTH_ENV_VAR, SPAWNS_ENV_VAR, parseDepth } from "./policy.js";
 import {
   processStartTime,
@@ -993,10 +994,19 @@ export class ChildRunner {
               "The child's startup manifest tool allowlist did not match the finalized route tools.",
             );
           }
+          const passthrough = spec.passthroughTools === undefined ? [] : spec.passthroughTools;
+          if (!isPassthroughToolSubset(passthrough, spec.tools ?? [])
+            || !sameNameSet(parsed.manifest.passthroughTools ?? [], passthrough)) {
+            throw startupFailure(
+              "preflight_manifest_mismatch",
+              "The child's startup manifest passthrough subset did not match the locally authorized tools.",
+            );
+          }
           expectation = {
             nonce: parsed.manifest.nonce,
             model: parsed.manifest.model,
             tools: parsed.manifest.tools,
+            ...(passthrough.length ? { passthroughTools: passthrough } : {}),
             nestedTools: parsed.manifest.nestedTools,
             ownEntryPaths: ownExtensionEntryCandidates(),
             preflightCommandPath: ownPreflightExtensionPath(),

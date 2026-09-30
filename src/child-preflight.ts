@@ -3,7 +3,7 @@
  *
  * Loaded explicitly by the Pi backend (`pi -e <this file>`) for Jev-routed child tasks
  * only. It registers one nonce-specific command and, when invoked, reports the child's
- * *actual* active model and tool set plus nested-tool provenance. The control side
+ * *actual* active model/tools, expected registered passthrough names and nested-tool provenance. The control side
  * (`src/runner.ts`, via `src/startup-check.ts`) is what decides pass/fail — this file
  * never grants anything and never trusts itself.
  *
@@ -20,6 +20,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { MAX_PASSTHROUGH_TOOLS } from "./passthrough-tools.js";
 import {
   PREFLIGHT_ACK_SCHEMA,
   PREFLIGHT_ACK_TYPE,
@@ -59,6 +60,25 @@ function safeActiveTools(pi: PreflightApi): string[] | null {
   try {
     const active = pi.getActiveTools();
     return Array.isArray(active) && active.every((name) => typeof name === "string") ? active : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeRegisteredPassthrough(pi: PreflightApi, wanted: ReadonlySet<string>): string[] | null {
+  try {
+    const all = pi.getAllTools();
+    if (!Array.isArray(all)) return null;
+    const names: string[] = [];
+    for (const tool of all as PreflightToolMetadata[]) {
+      if (typeof tool?.name === "string" && wanted.has(tool.name)) {
+        names.push(tool.name);
+        // Preserve duplicate/oversized evidence for refusal, but never emit an
+        // unbounded registry or any definitions, schemas or unrelated metadata.
+        if (names.length > MAX_PASSTHROUGH_TOOLS) break;
+      }
+    }
+    return names;
   } catch {
     return null;
   }
@@ -135,6 +155,7 @@ export default function childPreflight(pi: PreflightApi): void {
   if (!manifest.ok) return;
   const expectation = manifest.manifest;
   const nestedWanted = new Set(expectation.nestedTools ?? []);
+  const passthroughWanted = new Set(expectation.passthroughTools ?? []);
 
   pi.registerCommand(preflightCommandBase(expectation.nonce), {
     description: "private pi-subagent startup check",
@@ -150,6 +171,7 @@ export default function childPreflight(pi: PreflightApi): void {
         nonce: expectation.nonce,
         model,
         tools: safeActiveTools(pi),
+        ...(passthroughWanted.size ? { registeredPassthroughTools: safeRegisteredPassthrough(pi, passthroughWanted) } : {}),
         nestedToolsWithSource: safeNestedProvenance(pi, nestedWanted),
         host: readHostInfo(),
       };

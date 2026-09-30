@@ -65,14 +65,32 @@ from isolation, parallelism, or a fresh context.
 
 Jev picks individual tool names, not a capability bundle. Candidates come from
 the full available locally permitted catalog, not from agent `tools` defaults and
-not from only the parent's active tools. An explicit `tools` list is a ceiling,
-explore/review stay read-only regardless of the answer, and an empty selection
-never means "all tools".
+not from only the parent's active tools. An explicit `tools` list is an ordinary ceiling;
+configured `passthroughTools` infrastructure is preserved separately, not sent as
+selector choices. Explore/review reject ordinary writers, and an empty ordinary selection
+never means "all tools" (it can still retain the configured infrastructure).
 
 The finalized tool subset is passed to the child as Pi's `--tools` allowlist
 (`--no-tools` for a true empty set). Pi 0.86.0 is the verified baseline for
 built-in, extension and late-registered tool enforcement; an unsupported host is
 refused rather than silently weakened.
+
+Optional top-level `passthroughTools: string[]` in `~/.pi/subagent.json` defaults to `[]`.
+Use exact registered names of infrastructure you explicitly trust not to modify project
+files, including in explore/review. Names are trimmed/deduplicated; blanks, objects,
+invalid names, wildcards and unavailable entries refuse new work. There is no built-in
+preset, caller/env override or per-tool effect/activation setting. Known writers, unsafe
+builtins and `subagent`/`subagent_wait` cannot use this exception. Custom-tool safety is
+user trust, not automatic effect inference or an OS sandbox.
+
+The final allowlist is ordinary selected tools plus preserved names once, even under
+`tools:[]`. Original route metadata remains the ordinary choice. Both parent and child
+must register every listed definition; only this locally expected subset may be host-inactive.
+Ordinary selected tools must be active and all active names allowed. No forced activation,
+group assumption or indefinite wait is added. Missing/duplicate/unusable registration
+proof (including an old child without the new proof) stops before real task work; source,
+model, nonce and host checks remain strict. All routed paths and ranked attempts use the
+same invocation list; config edits affect later dispatches, and management stays independent.
 
 Parallel write-capable tasks sharing one checkout are rejected unless each uses
 `isolation: "worktree"`, a distinct `cwd`, or `allow_shared_writes: true`.
@@ -123,7 +141,7 @@ A Jev timeout or invalid decision still stops new dispatch; there is no emergenc
 
 Recognized settled model-unavailable, temporary rate-limit/service and transport errors can advance to the next candidate only before any tool execution begins in the current invocation. Once a tool starts, or protocol evidence is uncertain, do not restart the child on another or the same model. Auth/configuration, quota/billing, context, invalid requests, task/schema quality, cancellation and exhausted budgets never trigger model switching. Historical resume/fork messages are not new tool execution.
 
-`max_retries` limits all extension-level extra attempts: 0 means one initial attempt; 2 means at most three attempts. The built-in default remains 1. Availability failure advances directly to the next candidate; candidate exhaustion never wraps. Conclusively pre-work infrastructure failures may retry the same model within that budget. Every attempt shares tools, absolute deadline and cumulative reported cost/turn budgets, with fresh exact-model/tool startup verification. Switching makes no extra Jev call. Pi's internal provider retries are separate, unchanged and may delay fallback.
+`max_retries` limits all extension-level extra attempts: 0 means one initial attempt; 2 means at most three attempts. The built-in default remains 1. Availability failure advances directly to the next candidate; candidate exhaustion never wraps. Conclusively pre-work infrastructure failures may retry the same model within that budget. Every attempt shares allowed/passthrough tools, absolute deadline and cumulative reported cost/turn budgets, with fresh model/ordinary-active/passthrough-registered startup verification. Switching makes no extra Jev call. Pi's internal provider retries are separate, unchanged and may delay fallback.
 
 Plan/status distinguish original choice, ranked alternatives and actual attempts. Earlier failed output is retained as attributed previews/session pointers, not mixed into a later structured answer. All-failed tasks keep their final failure. Existing runs remain manageable without selector configuration or a credential.
 

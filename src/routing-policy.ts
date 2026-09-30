@@ -316,7 +316,7 @@ function routingSummary(config: JevRoutingConfig): string[] {
     lines.push(`- …and ${config.models.length - listed.length} more configured candidate(s); every configured candidate is eligible.`);
   }
   lines.push(
-    "The selector returns probability-ranked model candidates and one task-based, model-independent include/exclude decision per eligible tool. Unknown, unsafe or unavailable choices are rejected locally, and required Pi control-plane tools are added locally. Before any tool starts, a recognized settled model-availability failure can advance through this ranking without another selector request, under the total max_retries extra-attempt budget (0 = initial attempt only; default 1). Started or uncertain tool activity, auth/quota/context/schema failures, cancellation and exhausted task budgets stop switching. Confidence is answer-level; priorities use option probabilities, with no threshold.",
+    "The selector returns probability-ranked model candidates and one task-based, model-independent include/exclude decision per eligible tool. Unknown, unsafe or unavailable choices are rejected locally, and only the user's configured passthroughTools infrastructure names are preserved locally outside ordinary selection (no built-in preset). Before any tool starts, a recognized settled model-availability failure can advance through this ranking without another selector request, under the total max_retries extra-attempt budget (0 = initial attempt only; default 1). Started or uncertain tool activity, auth/quota/context/schema failures, cancellation and exhausted task budgets stop switching. Confidence is answer-level; priorities use option probabilities, with no threshold.",
   );
   return lines;
 }

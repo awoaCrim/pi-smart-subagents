@@ -28,6 +28,8 @@ Then ask Pi, for example:
 
 Jev chooses the model and tools. The optional `jevRouting.baseUrl` setting can point to a trusted complete `https://` SystemOne request URL; when omitted, the official `https://api.typesafe.ai/v1/systemone` endpoint remains the exact default. The value is strictly validated, and changing it changes the destination receiving the minimal routing disclosure. See the [configuration reference](docs/REFERENCE.md#jev-routing) for the full contract.
 
+Optional infrastructure tools can be preserved outside Jev's ordinary tool choices with the top-level `passthroughTools` string array in the same config file (default `[]`). Use exact registered names; there are no built-in presets. This is your explicit approval of trusted non-project-writing infrastructure, including in read-only profiles—not automatic proof of a custom tool's effects. Known write/unsafe builtin and nested-dispatch tools cannot use this exception. Startup requires every listed definition to be registered, while letting its host control whether it is active. See [passthrough tools](docs/REFERENCE.md#passthrough-tools).
+
 Open `/subagents` to inspect tasks and `/subagent-cost` to view usage.
 
 See the [usage reference](docs/REFERENCE.md#quick-usage) for parallel tasks, background work, worktrees and structured results, or the [TUI guide](docs/UX.md) for keyboard controls.
