@@ -60,7 +60,7 @@ export interface ResolvedTask extends TaskSpec {
 /** Local preparation cannot launch: it has candidates, not an execution model/tools. */
 export interface PreparedTask extends Omit<ResolvedTask, "model" | "canWrite" | "effectiveTools" | "routing"> {
   candidateTools: string[];
-  /** Request > agent > profile. Candidate, difficulty and parent are applied only after routing. */
+  /** Trusted agent/profile defaults. Candidate, difficulty and parent are applied only after routing. */
   requestedThinking?: TaskSpec["thinking"];
   parentThinking?: TaskSpec["thinking"];
 }
@@ -137,7 +137,6 @@ function normalizeTask(
     description?: string;
     system_prompt?: string;
     model?: string;
-    thinking?: TaskSpec["thinking"];
     difficulty?: unknown;
     tools?: string[];
     profile?: TaskProfile;
@@ -168,8 +167,8 @@ function normalizeTask(
 
   // Named agent resolution is still used for persona/profile/tool behavior;
   // its legacy model/fallback fields are deliberately ignored below.
-  // request params still win field-by-field. The agent body is the child's
-  // system prompt; an explicit system_prompt is appended after it.
+  // Supported request params still win field-by-field. The agent body is the
+  // child's system prompt; an explicit system_prompt is appended after it.
   let agent: AgentDefinition | undefined;
   if ((item as { agent?: string }).agent) {
     const lookup = resolveAgent(defaults.agents ?? new Map(), (item as { agent?: string }).agent!);
@@ -242,10 +241,11 @@ function normalizeTask(
   if (resolved.error || !resolved.tools || resolved.canWrite === undefined) return { error: resolved.error ?? "Tool resolution failed" };
   const cwd = resolvePath(parent.cwd, item.cwd);
   const output = item.output ? resolvePath(cwd, item.output) : undefined;
-  // Non-model fields retain the existing precedence: explicit request > agent
-  // file > per-profile config defaults; candidate/difficulty/parent thinking waits for routing.
+  // Thinking is intentionally not a public request field. Trusted agent and
+  // profile defaults are resolved here; candidate/difficulty/parent thinking
+  // waits for routing.
   const profileDefaults: TaskDefaults = defaults.taskDefaults?.[profile] ?? {};
-  const requestedThinking = item.thinking ?? agent?.thinking ?? profileDefaults.thinking;
+  const requestedThinking = agent?.thinking ?? profileDefaults.thinking;
   const effectiveThinking = requestedThinking ?? parent.thinking;
   if (effectiveThinking !== undefined && !isThinkingLevel(effectiveThinking)) {
     return { error: `Task ${index + 1}: thinking must be a non-empty Pi thinking level string without whitespace or control characters` };
@@ -565,7 +565,7 @@ export function finalizeRoutedTasks(
     if (rankingProblem) return { ok: false, error: `Task ${index + 1}: ${rankingProblem}.` };
     const { candidateTools: _candidates, nativeTools: _nativeTools, requestedThinking, parentThinking, ...spec } = item;
     // One frozen attempt plan per ranked candidate: same shared tools and route,
-    // per-candidate thinking under explicit > agent > profile > candidate > difficulty > parent.
+    // per-candidate thinking under agent > profile > candidate > difficulty > parent.
     const modelAttemptPlan: ModelAttemptSpec[] = [];
     const autoThinking = adaptiveThinkingForDifficulty(item.difficulty);
     for (const entry of ranked!) {

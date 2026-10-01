@@ -49,7 +49,7 @@ The standalone pi-subagent provides rich TUI support for monitoring, inspecting,
   output or stop explanation. Compact surfaces collapse that line safely; expanded detail wraps
   the same source text. The run id remains discoverable even when routing or setup fails, so
   status/wait can collect the bounded evidence without starting a duplicate child.
-- Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. When Pi maps a requested thinking level to another effective level, expanded/inline details show `thinking:requested→effective` (for example `off→minimal`). Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
+- Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. When Pi maps a resolved thinking level to another effective level, expanded/inline details show `thinking:configured→effective` (for example `off→minimal`). Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
 
 ### Footer status
 Terse and actionable only: `⚙ 2 running · 1 ready · /subagents`. Cleared when
@@ -89,7 +89,7 @@ text with run ids and a `wait { id }` pointer.
 - List: two lines per run — glyph/id/state/stats, then the task preview.
   Selection cursor `▶`, animated spinner for live runs.
 - Detail: run stats, summary, then per-task sections (glyph, label,
-  model/selector route/profile/thinking (and requested→effective thinking when Pi reports it), canonical timeout/error diagnostic,
+  model/selector route/profile/thinking (and configured→effective thinking when Pi reports it), canonical timeout/error diagnostic,
   usage, pointers, transcript/final output), scrollable with ↑↓/j/k and
   PageUp/PageDown. The detail viewport is calculated from the current terminal
   height and the overlay's 80% max-height, reserving space for pagination and

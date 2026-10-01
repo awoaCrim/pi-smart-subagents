@@ -134,7 +134,7 @@ export interface RoutingToolCandidate {
 /** Necessary typed constraints. Schema examples, paths and session IDs must not be added. */
 export interface RoutingConstraints {
   readonly profile: RoutingProfile;
-  /** Opaque Pi thinking level requested by the task/agent/profile. */
+  /** Opaque Pi thinking level resolved from trusted agent/profile/candidate/difficulty/parent sources. */
   readonly requestedThinking?: string;
   readonly structuredOutput?: boolean;
   /**

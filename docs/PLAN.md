@@ -22,9 +22,12 @@ gates below were collapsed — all items met their gates concurrently).
 1. **Invariants hold.** Every item must preserve docs/ARCHITECTURE.md
    invariants 1–26. Items that touch spawn/kill/lock paths must state which
    invariants they interact with in the PR description.
-2. **Precedence order is sacred:** explicit request params > agent file >
-   per-profile `taskDefaults` > parent inheritance. New fields slot into this
-   order; nothing reorders it.
+2. **Precedence order is sacred:** for public request fields, explicit request
+   params > agent file > per-profile `taskDefaults` > parent inheritance. The
+   internal thinking value is the deliberate exception: `thinking` is not a
+   public request field and resolves from trusted agent/profile/candidate
+   settings, then difficulty and parent inheritance. New fields slot into their
+   applicable chain; nothing reorders it.
 3. **Fail closed, degrade open.** Policy/validation errors reject before
    spawn with actionable messages. Runtime failures after money is spent
    preserve partial work (`partial`, never silent discard).

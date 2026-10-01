@@ -22,12 +22,6 @@ export function sanitizeProviderSchema<T>(value: T): T {
   return value;
 }
 
-const ThinkingLevel = Type.String({
-  minLength: 1,
-  maxLength: 64,
-  description: "Opaque Pi thinking level passed through unchanged. Pi/model-specific values such as max are allowed; the active Pi process decides support.",
-});
-
 const OutputMode = Type.Union([Type.Literal("inline"), Type.Literal("file-only")]);
 const Profile = Type.Union([Type.Literal("explore"), Type.Literal("review"), Type.Literal("general")]);
 const Difficulty = Type.Union([Type.Literal("simple"), Type.Literal("moderate"), Type.Literal("complex")]);
@@ -45,16 +39,17 @@ const Action = Type.Union([
 
 /** Shared optional task configuration fields. */
 export const TaskFields = {
-  agent: Type.Optional(Type.String({ minLength: 1, description: "Named agent to use (from .pi/agents/<name>.md). Supplies persona system prompt and defaults; explicit params still override." })),
+  agent: Type.Optional(Type.String({ minLength: 1, description: "Named agent to use (from .pi/agents/<name>.md). Supplies persona system prompt and trusted defaults; supported request fields still override their corresponding defaults. Thinking is configured outside the request body." })),
   description: Type.Optional(Type.String({ description: "Short human label (3-5 words) shown in UIs and result indexes." })),
   system_prompt: Type.Optional(Type.String({ description: "Extra system prompt appended to the child's prompt (does not replace it)." })),
   model: Type.Optional(Type.String({ description: "Legacy field: omit on new work. Jev chooses from the dedicated configured model list; explicit model is rejected rather than bypassing routing." })),
-  thinking: Type.Optional({ ...ThinkingLevel, description: "Opaque Pi thinking level for the child. Values such as max are passed through unchanged; Pi/model support decides validity. Defaults resolve as explicit task, agent, profile taskDefaults, selected candidate, difficulty-derived simple→minimal/moderate→medium/complex→high, then the parent's level." }),
+  // Thinking is deliberately absent: model callers cannot override trusted
+  // agent/profile/candidate defaults through the request body.
   tools: Type.Optional(Type.Array(Type.String({ description: "Ordinary direct tool name." }), { description: "Optional ordinary-candidate ceiling for Jev. Default candidates are the parent's active direct tools; Pi's official native exposure tools are carried automatically and are not caller-selected." })),
   profile: Type.Optional({ ...Profile, description: "Capability profile: explore/review cannot write project files; general permits Jev to choose from the parent's active direct catalog and may write. Pi-native non-direct tools retain host-owned exposure semantics." }),
   difficulty: Type.Optional({
     ...Difficulty,
-    description: "Optional dispatch difficulty for Jev routing context: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Jev still chooses the model/tools; when no explicit or candidate thinking default exists, local policy uses simple→minimal, moderate→medium, complex→high.",
+    description: "Optional dispatch difficulty for Jev routing context: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Jev still chooses the model/tools; when no agent, profile or candidate thinking default exists, local policy uses simple→minimal, moderate→medium, complex→high.",
   }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the child process." })),
   timeout_ms: Type.Optional(Type.Number({ minimum: 1, maximum: 24 * 60 * 60_000, description: "Total budget in milliseconds including local preflight, Jev selection, setup, queue and retries. Timed-out runs report which phase timed out." })),

@@ -13,7 +13,7 @@
   after a second window so retry can take over. Group kills verify process start-time
   identity (Linux `/proc`, macOS/BSD `ps lstart`) before signalling a possibly-recycled
   PID; transcript joins happen only on message boundaries, not per-chunk ticks.
-- Retry lives in [orchestrator.ts](../src/orchestrator.ts). Ranked extension tasks advance through a locally finalized Jev candidate plan only for recognized settled availability failures before any current-invocation tool starts. [model-failover.ts](../src/model-failover.ts) owns conservative evidence classification and bounded attempt helpers. Tools stay fixed, thinking resolves per candidate, and usage accumulates once. Unknown execution evidence blocks restart. The trusted unranked SDK retains its separate `isTransientFailure` and explicit fallback contract.
+- Retry lives in [orchestrator.ts](../src/orchestrator.ts). Ranked extension tasks advance through a locally finalized Jev candidate plan only for recognized settled availability failures before any current-invocation tool starts. [model-failover.ts](../src/model-failover.ts) owns conservative evidence classification and bounded attempt helpers. Tools stay fixed, thinking resolves per candidate from trusted agent/profile/candidate/difficulty/parent sources, and usage accumulates once. Unknown execution evidence blocks restart. The trusted unranked SDK retains its separate `isTransientFailure` and explicit fallback contract.
 - `context: "fork"` spawns the child with `--fork <parent session file>` so it starts
   from a real branched copy of the parent conversation. Fail-fast when the parent
   session is not persisted; single-task only.
@@ -32,7 +32,7 @@
 - `maintenance.ts`: filesystem GC (session files) and abort-race helpers; kept out of persistence.
 - `usage.ts`: provider-reported root/subagent/combined accounting, plus a separate
   once-per-request routing-token category whose currency is reported as unreported.
-- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the Jev-selected active `direct` subset plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions must be registered in the child but remain host-controlled for activity. Direct SDK/custom tools are ordinary candidates; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking resolves per explicit/agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
+- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the Jev-selected active `direct` subset plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions must be registered in the child but remain host-controlled for activity. Direct SDK/custom tools are ordinary candidates; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking is not a public request field: it resolves from trusted agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
   shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
@@ -129,8 +129,10 @@ Invariants:
 23. Only `async: true` runs notify on completion and appear in the ambient widget.
     Notification delivery respects delivered-once: a `wait` that consumed the run
     suppresses the notification. The actual final model and a bounded attempt-chain tail with its total count use the same display projection as compact results.
-24. Named agent files supply per-field defaults only; explicit request params always
-    win, and capability profiles fail closed regardless of what an agent file declares.
+24. Named agent files supply per-field defaults only; request fields win where the
+    public schema exposes them, while `thinking` is intentionally not a request field
+    and resolves from trusted agent/profile/candidate settings, difficulty and parent
+    inheritance. Capability profiles fail closed regardless of what an agent file declares.
 25. Structured-output validation never discards paid work: schema failure after the
     repair round downgrades completed → partial with `structuredError`, and the raw
     text still delivers. Validation is enforced on the parent side of the process

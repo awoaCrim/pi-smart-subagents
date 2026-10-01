@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.11.8 — 2026-10-01
+
+### Request-boundary safety
+
+- Remove `thinking` from the public `subagent`/`tasks[]` request schema so model callers cannot manually override reasoning levels. Trusted agent frontmatter, profile defaults, Jev candidate defaults, difficulty mapping and parent-host inheritance remain unchanged; Pi-reported effective thinking stays observable.
+
 ## 0.11.7 — 2026-10-01
 
 ### Pi 0.99.1 compatibility and adaptive routing
