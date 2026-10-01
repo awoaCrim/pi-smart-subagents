@@ -101,7 +101,7 @@ combinations are **refused**, not silently degraded:
 | read-only profile        | tool allowlist |
 | steering / grace wrap-up | yes           |
 | `context: "fork"`        | yes           |
-| `thinking`               | yes           |
+| resolved thinking       | yes (not a request field) |
 | `output_schema`          | yes           |
 
 ## Budgets and safety
@@ -140,11 +140,12 @@ Plan/status distinguish original choice, ranked alternatives and actual attempts
 
 An optional candidate `thinking` value is an opaque Pi thinking-level string;
 common values include `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
-`max`, but model-specific values are passed through unchanged. Resolution is
-explicit task > agent > profile `taskDefaults.thinking` > selected candidate >
-difficulty default (`simple`→`minimal`, `moderate`→`medium`, `complex`→`high`)
-> parent thinking. Pi may clamp a request; routed result metadata reports the
-host-effective level when available.
+`max`, but model-specific values are passed through unchanged. The public
+`subagent`/`tasks[]` request has no `thinking` field, so model callers cannot
+manually override it. Resolution is agent > profile `taskDefaults.thinking` >
+selected candidate > difficulty default (`simple`→`minimal`, `moderate`→`medium`,
+`complex`→`high`) > parent thinking. Pi may clamp the resolved value; routed
+result metadata reports the host-effective level when available.
 The extension re-reads `jevRouting` on each dispatch and injects non-secret
 routing guidance into the parent prompt. The user stores the TypeSafe credential
 in `jevRouting.apiKey` in the private `~/.pi/subagent.json`; do not read, display

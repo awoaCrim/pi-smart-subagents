@@ -80,7 +80,7 @@ The startup proof checks the exact model and ordinary active set, requires every
 Jev routing sends a minimal projection to TypeSafe: the current delegated task
 text, the configured candidate model IDs and your per-model descriptions,
 eligible candidate tool names and descriptions, and necessary constraints
-(profile, requested thinking, whether structured output is needed). It does not
+(profile, the resolved thinking level, whether structured output is needed). It does not
 upload repository files, conversation history, full system prompts, persona text
 or tool parameter schemas, and does not read them in the background. Resume, fork
 and synthesis select from the new task instruction rather than the assembled

@@ -510,13 +510,13 @@ function agentCatalog(runtime: SessionRuntime): Map<string, AgentDefinition> {
 function guidelines(catalog?: Map<string, AgentDefinition>): string[] {
   const agentLines = catalog?.size
     ? [
-        "Named agents available via agent:'<name>' (persona prompt + defaults; explicit params still override):",
+        "Named agents available via agent:'<name>' (persona prompt + trusted defaults; request fields may refine supported options; thinking is not a request field):",
         ...describeCatalog(catalog).map((line) => `  - ${line}`),
       ]
     : [];
   return [
     ...agentLines,
-    "Omit model and fallback_models on all new work. Jev selects the execution model from the user-maintained dedicated candidate list and selects individual locally permitted tools. Explicit legacy model/fallback fields are rejected.",
+    "Omit model, fallback_models and thinking on all new work. Jev selects the execution model from the user-maintained dedicated candidate list and selects individual locally permitted tools. Explicit legacy model/fallback fields are rejected; thinking comes from trusted agent/profile/candidate defaults, difficulty and the parent host level.",
     "action:plan calls Jev and may incur selector fees, but starts no child. Later dispatch selects again. Jev failure stops new dispatch; existing-run management requires no routing config or key.",
     "Delegate independent, read-heavy exploration or clean-context review; keep tightly coupled work in the parent.",
     "Prefer agent:'<name>' when a named agent matches the task — its persona prompt is usually better than an improvised one. Compose fields manually only when no agent fits.",
