@@ -278,9 +278,9 @@ export function candidateThinking(config: JevRoutingConfig, model: string): stri
 }
 
 /**
- * Build frozen tool candidates from local tool metadata. Blank names are dropped and
+ * Build frozen local tool metadata for route activation. Blank names are dropped and
  * duplicate names keep the first description; no schema, source path or executable
- * definition is retained.
+ * definition is retained or sent to the selector.
  */
 export function toToolCandidates(
   tools: ReadonlyArray<{ name: string; description?: string }>,
@@ -305,7 +305,7 @@ function routingSummary(config: JevRoutingConfig): string[] {
     `Selector: ${config.selectorModel} (pin an exact version instead of the moving alias to make selection reproducible).`,
     "Credential: jevRouting.apiKey in the private ~/.pi/subagent.json config file. Never read or copy its value into prompts, logs or results; the routing transport uses it only for the Authorization header.",
     `Logical selection deadline: ${config.timeoutMs} ms, covering all selector requests and waiting for one invocation.`,
-    "All new dispatch uses the Pi child runtime; Jev selects only the configured model and ordinary tool candidates.",
+    "All new dispatch uses the Pi child runtime; Jev selects only the configured execution model, while local policy builds the complete ordinary candidate set and child startup negotiates the effective intersection.",
     "Candidate models (exact IDs; the user's per-model characteristics are the matching criteria):",
   ];
   const listed = config.models.slice(0, MAX_GUIDANCE_MODEL_LINES);
@@ -316,7 +316,7 @@ function routingSummary(config: JevRoutingConfig): string[] {
     lines.push(`- …and ${config.models.length - listed.length} more configured candidate(s); every configured candidate is eligible.`);
   }
   lines.push(
-    "The selector returns probability-ranked model candidates and one task-based, model-independent include/exclude decision per eligible ordinary direct tool. Unknown, unsafe or unavailable choices are rejected locally; Pi's official non-direct, non-hidden tools are preserved automatically outside ordinary selection and must be registered in the child while their activity remains host-owned. Direct SDK/custom tools stay ordinary candidates. Before any tool starts, a recognized settled model-availability failure can advance through this ranking without another selector request, under the total max_retries extra-attempt budget (0 = initial attempt only; default 1). Started or uncertain tool activity, auth/quota/context/schema failures, cancellation and exhausted task budgets stop switching. Confidence is answer-level; priorities use option probabilities, with no threshold.",
+    "The selector returns probability-ranked model candidates only. Every locally eligible active ordinary direct tool is included in the child candidate allowlist and shared by every ranked model attempt; no per-tool selector choice is made. Unknown, unsafe or unavailable tools are rejected locally; Pi's official non-direct, non-hidden tools are preserved automatically, their child-registration evidence is negotiated, and their activity remains host-owned. An unforced child omission is recorded as diagnostics, while an explicitly requested tool that is missing fails closed. Direct SDK/custom tools stay ordinary candidates. Before any tool starts, a recognized settled model-availability failure can advance through this ranking without another selector request, under the total max_retries extra-attempt budget (0 = initial attempt only; default 1). Started or uncertain tool activity, auth/quota/context/schema failures, cancellation and exhausted task budgets stop switching. Confidence is answer-level; priorities use option probabilities, with no threshold."
   );
   return lines;
 }
@@ -333,7 +333,7 @@ export function formatJevRoutingPrompt(config: JevRoutingConfig | undefined, err
       error || `No valid jevRouting configuration was found in ${JEV_ROUTING_CONFIG_FILE}.`,
       "Management actions (status/wait/cancel/steer/diff/apply/discard) remain available, but every new task/tasks[] spawn, plan, /btw, resume, fork and synthesis is rejected until jevRouting is configured.",
       "Add jevRouting with selectorModel, apiKey and 1-255 candidate model entries (exact provider/model IDs plus user-written characteristics, including Chinese). The user must store the credential in the private config file, not in chat or source control. Do not read or display the key. Legacy apiKeyEnv is rejected; there is no environment fallback.",
-      "Do not pass model or fallback_models; the selector chooses the execution model and tools.",
+      "Do not pass model or fallback_models; the selector chooses the execution model, local policy builds the ordinary candidate set, and child startup negotiates the effective capability intersection.",
       "Use the package routing template; do not invent model IDs or import legacy modelPolicy entries automatically.",
     ].join("\n");
   }

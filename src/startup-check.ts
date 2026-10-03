@@ -2,9 +2,11 @@
  * Pi child startup-handshake contract for Jev-routed subagent tasks.
  *
  * A routed dispatch must prove *before* the real task prompt reaches the child that the
- * child actually loaded the expected execution model, active ordinary tools and registered
- * native definitions derived from Pi's official exposure metadata. Native activity remains
- * host-owned; ordinary direct tools must be active.
+ * child loaded the expected execution model and negotiated a bounded effective capability
+ * set from the parent candidate allowlist. Pi may omit a parent-only extension tool from a
+ * child, so ordinary candidate names are intersected with child evidence; only explicitly
+ * forced names are fail-closed. Native activity remains host-owned, and nested dispatch
+ * provenance is checked whenever that capability is actually exposed.
  * Parent-side catalog knowledge is not proof: Pi silently drops unknown `--tools` names,
  * and a child may load a different (possibly older) copy of this package, whose nested
  * `subagent` tool would bypass routing entirely.
@@ -12,7 +14,7 @@
  * This module is the single source of truth for the bounded, non-secret handshake:
  *
  *  - manifest + acknowledgement schemas and the private command naming scheme,
- *  - the pure command resolver and acknowledgement verifier,
+ *  - the pure command resolver and capability-negotiation verifier,
  *  - the host-version gate for the one baseline that was actually verified.
  *
  * It is imported by `src/backends/pi.ts` (writes the temporary manifest and loads the
@@ -30,6 +32,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EMPTY_TOOL_NAMES, MAX_TOOL_NAME_LENGTH, isToolNameList, isToolNameSubset } from "./pi-tools.js";
+import type { ToolNegotiationDiagnostics } from "./types.js";
 import { isThinkingLevel } from "./thinking.js";
 
 /** Custom-message type of the child-side acknowledgement. */
@@ -68,8 +71,10 @@ export interface PreflightManifest {
   readonly nonce: string;
   /** Exact `provider/modelId` the child must have active. */
   readonly model: string;
-  /** Finalized allowlist (ordinary Jev selection + official native definitions). */
+  /** Finalized child candidate allowlist (ordinary + official native definitions). */
   readonly tools: readonly string[];
+  /** Explicit caller-requested names that must be effective in the child. */
+  readonly forcedTools?: readonly string[];
   /** Official non-direct definitions whose activation is host-owned. */
   readonly nativeTools?: readonly string[];
   /** Nested dispatch tools whose loaded source must be this package's extension entry. */
@@ -81,6 +86,7 @@ export interface PreflightExpectation {
   readonly nonce: string;
   readonly model: string;
   readonly tools: readonly string[];
+  readonly forcedTools?: readonly string[];
   readonly nativeTools?: readonly string[];
   readonly nestedTools?: readonly string[];
   /** Expected own extension entry paths; defaults to the current package's entries. */
@@ -246,8 +252,12 @@ export function parsePreflightManifest(raw: unknown): PreflightManifestParse {
   if (!tools) {
     return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried no usable tool list." };
   }
-  const nativeTools = parsed.nativeTools;
-  if (nativeTools !== undefined && !isToolNameSubset(nativeTools, tools)) {
+  const forcedTools = parsed.forcedTools === undefined ? undefined : readNameList(parsed.forcedTools, MAX_ACK_TOOLS);
+  if (parsed.forcedTools !== undefined && (!forcedTools || !isToolNameSubset(forcedTools, tools))) {
+    return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried an unusable forced tool set." };
+  }
+  const nativeTools = parsed.nativeTools === undefined ? undefined : readNameList(parsed.nativeTools, MAX_ACK_TOOLS);
+  if (parsed.nativeTools !== undefined && (!nativeTools || !isToolNameSubset(nativeTools, tools))) {
     return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried an unusable native tool set." };
   }
   let nestedTools: string[] | undefined;
@@ -256,10 +266,14 @@ export function parsePreflightManifest(raw: unknown): PreflightManifestParse {
     if (parsed.nestedTools !== undefined && nestedTools === undefined) {
       return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried an unusable nested-tool list." };
     }
+    if (nestedTools !== undefined && !isToolNameSubset(nestedTools, tools)) {
+      return { ok: false, code: "preflight_manifest_unreadable", message: "The preflight manifest carried nested tools outside its candidate allowlist." };
+    }
   }
   return {
     ok: true,
     manifest: { schema: PREFLIGHT_MANIFEST_SCHEMA, nonce: parsed.nonce, model: parsed.model, tools, nestedTools,
+      ...(forcedTools === undefined ? {} : { forcedTools }),
       ...(nativeTools === undefined ? {} : { nativeTools }),
     },
   };
@@ -387,16 +401,45 @@ export function compareHostVersion(version: unknown): "ok" | "unsupported" | "un
   return "ok";
 }
 
+/** Bounded result of the child capability negotiation. */
+export interface PreflightAckInspection {
+  readonly problems: readonly string[];
+  readonly diagnostics: ToolNegotiationDiagnostics;
+}
+
 /**
- * Verify an acknowledgement against the local expectation. Returns problem codes; an empty
- * list means the child loaded the expected model, active ordinary tools and registered
- * native definitions. The expected native subset, never the child's claims, determines
- * which names may be inactive; native activity itself remains host-owned. Every active
- * name outside the finalized allowlist is still a failure.
+ * Inspect an acknowledgement and negotiate the child-effective tool set.
+ *
+ * The finalized candidate list is intentionally not treated as proof that every
+ * definition exists in the child: Pi may omit a parent-only extension tool from
+ * the child registry. Such names become `omittedTools`. Only explicitly forced
+ * names are fail-closed; active names outside the candidate allowlist remain a
+ * hard mismatch because capability negotiation must never broaden access.
  */
-export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectation): string[] {
+export function negotiatePreflightAck(ack: unknown, expectation: PreflightExpectation): PreflightAckInspection {
+  const parsedCandidates = readNameList(expectation.tools, MAX_ACK_TOOLS);
+  const candidateValid = parsedCandidates !== null;
+  const candidateTools = parsedCandidates ?? [];
+  const rawForced = expectation.forcedTools;
+  const parsedForced = rawForced === undefined ? [] : readNameList(rawForced, MAX_ACK_TOOLS);
+  const forcedValid = !candidateValid
+    || (rawForced === undefined ? true : parsedForced !== null && isToolNameSubset(parsedForced, candidateTools));
+  const forcedTools = candidateValid && forcedValid ? [...(parsedForced ?? [])] : [];
   const problems: string[] = [];
-  if (!ack || typeof ack !== "object") return ["ack-malformed"];
+  if (!candidateValid) problems.push("candidate-expectation-invalid");
+  if (!forcedValid) problems.push("forced-expectation-invalid");
+
+  const freezeDiagnostics = (
+    effectiveTools: readonly string[],
+    omittedTools: readonly string[],
+  ): ToolNegotiationDiagnostics => Object.freeze({
+    candidateTools: Object.freeze([...candidateTools]),
+    effectiveTools: Object.freeze([...effectiveTools]),
+    omittedTools: Object.freeze([...omittedTools]),
+    forcedTools: Object.freeze([...forcedTools]),
+  });
+  const emptyDiagnostics = (): ToolNegotiationDiagnostics => freezeDiagnostics([], candidateTools);
+  if (!ack || typeof ack !== "object") return { problems: [...problems, "ack-malformed"], diagnostics: emptyDiagnostics() };
   const payload = ack as PreflightAckPayload;
   if (payload.schema !== PREFLIGHT_ACK_SCHEMA) problems.push("ack-schema-mismatch");
   if (payload.nonce !== expectation.nonce) problems.push("nonce-mismatch");
@@ -418,27 +461,30 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
   }
 
   const expectedNative = expectation.nativeTools === undefined ? EMPTY_TOOL_NAMES : expectation.nativeTools;
-  const validNative = isToolNameSubset(expectedNative, expectation.tools);
+  const validNative = isToolNameSubset(expectedNative, candidateTools);
   if (!validNative) problems.push("native-expectation-invalid");
   const nativeTools = validNative ? expectedNative : EMPTY_TOOL_NAMES;
-  if (nativeTools.length > 0) {
-    // Nonempty metadata requires explicit proof; an older child cannot silently
-    // waive registration simply by omitting the new acknowledgement field.
+
+  // A missing native registration is now negotiable: it is simply not part of
+  // childEffectiveTools unless the caller explicitly forced that name. A malformed
+  // non-null claim remains a hard evidence problem and is never trusted as capability.
+  let registeredNative = new Set<string>();
+  if (nativeTools.length > 0 && payload.registeredNativeTools !== undefined && payload.registeredNativeTools !== null) {
     if (!isToolNameSubset(payload.registeredNativeTools, nativeTools)) {
-      problems.push("native-registration-invalid:requires-current-child-proof");
+      problems.push("native-registration-invalid");
     } else {
-      for (const required of nativeTools) {
-        if (!payload.registeredNativeTools.includes(required)) problems.push(`missing-native-registration:${required}`);
-      }
+      registeredNative = new Set(payload.registeredNativeTools);
     }
   }
 
+  const active = new Set<string>();
+  let activeListValid = false;
   if (!Array.isArray(payload.tools)) {
     problems.push("tools-not-array");
   } else if (payload.tools.length > MAX_ACK_TOOLS) {
     problems.push("ack-too-large");
   } else {
-    const active = new Set<string>();
+    activeListValid = true;
     for (const entry of payload.tools) {
       if (typeof entry !== "string" || entry.length === 0 || entry.length > MAX_TOOL_NAME_LENGTH) {
         problems.push("tool-name-invalid");
@@ -447,15 +493,32 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
       if (active.has(entry)) problems.push(`tool-duplicate:${entry}`);
       active.add(entry);
     }
-    for (const required of expectation.tools) {
-      if (!nativeTools.includes(required) && !active.has(required)) problems.push(`missing-tool:${required}`);
-    }
     for (const observed of active) {
-      if (!expectation.tools.includes(observed)) problems.push(`unexpected-tool:${observed}`);
+      if (!candidateTools.includes(observed)) problems.push(`unexpected-tool:${observed}`);
     }
   }
 
-  const nested = expectation.nestedTools ?? [];
+  const observed = new Set<string>();
+  if (activeListValid) {
+    for (const name of candidateTools) {
+      if (nativeTools.includes(name)) {
+        if (registeredNative.has(name)) observed.add(name);
+      } else if (active.has(name)) {
+        observed.add(name);
+      }
+    }
+  }
+  // Native definitions are host-managed and may be inactive, so registration
+  // proof can make them effective even when they are absent from getActiveTools().
+  for (const name of registeredNative) observed.add(name);
+
+  const rawNested = expectation.nestedTools;
+  const parsedNested = rawNested === undefined ? [] : readNameList(rawNested, MAX_ACK_NESTED);
+  const nestedValid = rawNested === undefined
+    ? true
+    : parsedNested !== null && isToolNameSubset(parsedNested, candidateTools, MAX_ACK_NESTED);
+  const nested = nestedValid ? (parsedNested ?? []) : [];
+  if (!nestedValid) problems.push("nested-expectation-invalid");
   if (nested.length > 0) {
     const expectedEntries = expectation.ownEntryPaths ?? ownExtensionEntryCandidates();
     const rows = Array.isArray(payload.nestedToolsWithSource) ? payload.nestedToolsWithSource : [];
@@ -467,7 +530,11 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
       if (typeof candidate.name !== "string") continue;
       if (!byName.has(candidate.name)) byName.set(candidate.name, candidate);
     }
+    // Source attestation is required only when the child actually exposes the
+    // nested capability (or when it was explicitly forced). An absent row is an
+    // ordinary omission under the negotiated capability model.
     for (const tool of nested) {
+      if (!active.has(tool) && !forcedTools.includes(tool)) continue;
       const row = byName.get(tool);
       if (!row) {
         problems.push(`nested-tool-source-missing:${tool}`);
@@ -478,14 +545,27 @@ export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectati
         problems.push(`nested-tool-source-not-extension:${tool}`);
         continue;
       }
-      const observed = normalizeFsPath(row.path);
-      if (!observed || expectedEntries.length === 0 || !expectedEntries.includes(observed)) {
+      const observedPath = normalizeFsPath(row.path);
+      if (!observedPath || expectedEntries.length === 0 || !expectedEntries.includes(observedPath)) {
         problems.push(`nested-tool-source-mismatch:${tool}`);
       }
     }
   }
 
-  return problems;
+  const effectiveTools = candidateTools.filter((name, index) => observed.has(name) && candidateTools.indexOf(name) === index);
+  const omittedTools = candidateTools.filter((name, index) => !observed.has(name) && candidateTools.indexOf(name) === index);
+  for (const required of forcedTools) {
+    if (!observed.has(required)) problems.push(`missing-forced-tool:${required}`);
+  }
+  return {
+    problems,
+    diagnostics: freezeDiagnostics(effectiveTools, omittedTools),
+  };
+}
+
+/** Backward-compatible problem-only verifier for focused callers and old harnesses. */
+export function verifyPreflightAck(ack: unknown, expectation: PreflightExpectation): string[] {
+  return [...negotiatePreflightAck(ack, expectation).problems];
 }
 
 /** Bounded, safe diagnostic text for a verification failure. */

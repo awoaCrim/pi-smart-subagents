@@ -1,4 +1,4 @@
-import type { UsageStats, RunSnapshot, RunState, RunMode, TimeoutPhase, ToolActivity, ModelAttemptRecord } from './types.js';
+import type { UsageStats, RunSnapshot, RunState, RunMode, TimeoutPhase, ToolActivity, ToolNegotiationDiagnostics, ModelAttemptRecord } from './types.js';
 import type { RankedModelOption } from './routing-types.js';
 import { utf8SafePrefix } from './model-failover.js';
 import { Buffer } from 'node:buffer';
@@ -297,6 +297,8 @@ export interface InlineTaskView {
   attemptedModels?: string[];
   /** Sticky pre-tool boundary state across this task's attempts. */
   toolActivity?: ToolActivity;
+  /** Child capability negotiation; omitted tools are non-fatal unless forced. */
+  toolDiagnostics?: ToolNegotiationDiagnostics;
   /** Bounded ranked attempt history (reasons for switches; previews capped). */
   modelAttempts?: ModelAttemptRecord[];
   structuredOutput?: unknown;

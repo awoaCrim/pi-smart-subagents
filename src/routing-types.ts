@@ -28,7 +28,7 @@ export const ROUTING_TIMEOUT_MIN_MS = 100;
 export const ROUTING_TIMEOUT_MAX_MS = 600_000;
 /** Dedicated candidate-model allowlist bounds (Choice supports up to 255 options). */
 export const MAX_ROUTING_MODELS = 255;
-/** Eligible tool questions per logical selection. */
+/** Bounded ordinary tool names retained in one routing decision and its receipts. */
 export const MAX_ROUTING_TOOL_QUESTIONS = 256;
 /** Serialized request bound (local resource limit, not an advertised provider token limit). */
 export const MAX_ROUTING_REQUEST_BYTES = 24 * 1024;
@@ -123,8 +123,9 @@ export interface RankedModelOption {
 }
 
 /**
- * A tool offered to the selector. The caller has already applied local availability and
- * profile filtering; the selector sees only ordinary candidates it may choose.
+ * A locally eligible ordinary tool. The caller has already applied local availability and
+ * profile filtering; all such tools are activated for the child and are not individually
+ * selected by Jev.
  */
 export interface RoutingToolCandidate {
   readonly name: string;
@@ -153,7 +154,7 @@ export interface RoutingSelectInput {
   readonly task: string;
   /** Locally eligible candidate models, preserving the user's configured order. */
   readonly models: readonly RoutingModelCandidate[];
-  /** Eligible ordinary tools; an empty/absent list means a model-only question. */
+  /** Locally eligible ordinary tools; they are activated as a complete set and are not sent as selector questions. */
   readonly tools?: readonly RoutingToolCandidate[];
   readonly constraints?: RoutingConstraints;
 }
@@ -193,8 +194,9 @@ export interface RoutingReceipt {
 }
 
 /**
- * A validated selection. `selectedTools` is the Jev-chosen subset; the caller still
- * applies local capability validation and recomputes writer capability.
+ * A validated model selection plus the locally activated ordinary tools. `selectedTools`
+ * is retained as bounded route metadata for display/persistence; local policy remains the
+ * authority for the actual child tool set and writer capability.
  */
 export interface RoutingDecision {
   /** Unique logical decision ID, separate from every receipt/request ID. */

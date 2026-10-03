@@ -38,13 +38,14 @@ Jev selection is billed separately from child execution:
   while still incurring selector fees.
 - No selector price is inferred from a public price page or a local model table.
 
-A routing record exists per selector HTTP request, not per logical selection: a
-model question plus one or more packed tool-question requests each produce their
-own record, and all of them count once by full request ID. Plan selections and
-pre-spawn failures are included, because no child run exists to carry them.
+A routing record exists per selector HTTP request, not per logical selection: the
+model question produces the selector record, and all requests count once by full
+request ID. Tool activation is local and adds no selector HTTP requests. Plan
+selections and pre-spawn failures are included, because no child run exists to
+carry them.
 
 Successful route metadata (decision ID, selector model and reported version(s),
-original selected model, ranked candidate probabilities, shared ordinary selected tools, confidence, success outcome, latency and receipt IDs) travels with the run and both registry projections. Official native exposure names are derived execution metadata, not extra selector choices or persisted executable policy. Actual attempt models are recorded separately; fallback never rewrites the initial selection as a new decision. Per-request failure outcomes and safe error codes stay in selector receipts. It carries no descriptions, raw request bodies, headers,
+original selected model, ranked candidate probabilities, locally activated ordinary candidate tools, confidence, success outcome, latency and receipt IDs) travels with the run and both registry projections. Child-effective/omitted/forced capability diagnostics are persisted separately as bounded result metadata. Official native exposure names are derived execution metadata, not extra selector choices or persisted executable policy. Actual attempt models are recorded separately; fallback never rewrites the initial selection as a new decision. Per-request failure outcomes and safe error codes stay in selector receipts. It carries no descriptions, raw request bodies, headers,
 credentials or invented rationale.
 
 Receipts pending append visibility remain in a bounded session-local overlay until the

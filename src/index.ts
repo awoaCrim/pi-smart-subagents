@@ -55,5 +55,6 @@ export type {
   TaskProfile,
   TaskResult,
   TaskSpec,
+  ToolNegotiationDiagnostics,
   UsageStats,
 } from "./types.js";

@@ -3,9 +3,10 @@
  *
  * Loaded explicitly by the Pi backend (`pi -e <this file>`) for Jev-routed child tasks
  * only. It registers one nonce-specific command and, when invoked, reports the child's
- * *actual* active model/tools, expected registered native names and nested-tool provenance. The control side
- * (`src/runner.ts`, via `src/startup-check.ts`) is what decides pass/fail — this file
- * never grants anything and never trusts itself.
+ * *actual* model, active ordinary evidence, registered native names and nested-tool
+ * provenance. The control side (`src/runner.ts`, via `src/startup-check.ts`) negotiates
+ * the effective intersection and decides pass/fail — this file never grants anything and
+ * never trusts itself.
  *
  * Deliberate properties:
  *
