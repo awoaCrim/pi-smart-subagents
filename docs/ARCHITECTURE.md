@@ -32,7 +32,7 @@
 - `maintenance.ts`: filesystem GC (session files) and abort-race helpers; kept out of persistence.
 - `usage.ts`: provider-reported root/subagent/combined accounting, plus a separate
   once-per-request routing-token category whose currency is reported as unreported.
-- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the Jev-selected active `direct` subset plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions must be registered in the child but remain host-controlled for activity. Direct SDK/custom tools are ordinary candidates; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking is not a public request field: it resolves from trusted agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
+- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the complete locally permitted active `direct` set after profile and explicit-tool policy, plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions use bounded child-registration evidence and remain host-controlled for activity; an unforced missing definition is negotiated as omitted. Direct SDK/custom tools are ordinary local capabilities; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking is not a public request field: it resolves from trusted agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
   shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
@@ -40,10 +40,10 @@
   candidate intersection with locally available models, and the injected model-facing
   guidance; `jev-router.ts` owns the injectable TypeSafe transport, uses the frozen
   per-invocation URL with `redirect: "error"`, and owns response validation, deadlines and
-  per-request receipts, including a validated full probability ranking and model-independent
-  task tool decisions; `dispatch-routing.ts` resolves every worker before any launch and
-  refuses a partially selected fanout. Local policy finalizes a frozen candidate attempt
-  plan with per-model thinking and one shared tool set. The configured URL is a private
+  per-request receipts, including a validated full probability ranking for model selection;
+  `dispatch-routing.ts` resolves every worker before any launch and refuses a partially
+  selected fanout. Local policy finalizes a frozen candidate attempt plan with per-model
+  thinking and one complete locally permitted tool set shared by every attempt. The configured URL is a private
   transport setting: it is not part of routing DTOs, prompts, receipts, persisted results
   or child arguments. The router has no engine imports and makes no parent UI calls.
 - `config.ts`: defaults ← `~/.pi/subagent.json` ← `PI_SUBAGENT_*` env overrides. Each
@@ -152,29 +152,32 @@ Invariants:
     duplicate child.
 29. Every new extension-managed invocation (`task`/`tasks[]`, `action:"plan"`, `/btw`,
     resume, fork, nested dispatch and the optional synthesis child) crosses one selector
-    interface before any child starts. The dedicated candidate list intersected with locally available models is the only source of execution models. One validated full probability ranking belongs to the invocation, and fallback reuses it without another selection. The original selectedModel/confidence remain immutable; result.model reports the actual attempt. The full locally permitted tool catalog is the only tool candidate source, and one model-independent selection is shared by every attempt. Legacy `model`/`fallback_models`
-    fields are rejected on new work, and an empty selected tool set never becomes
-    inheritance or "all tools".
-30. The finalized tool subset is passed to the child as Pi's `--tools` allowlist
-    (`--no-tools` when empty). Pi 0.86.0 is the verified baseline for built-in, extension
+    interface before any child starts. The dedicated candidate list intersected with locally available models is the only source of execution models. One validated full probability ranking belongs to the invocation, and fallback reuses it without another selection. The original selectedModel/confidence remain immutable; result.model reports the actual attempt. The full locally permitted tool catalog is the only ordinary capability source, and one complete local tool set is shared by every attempt; Jev selects the model only and makes no per-tool request. Legacy `model`/`fallback_models`
+    fields are rejected on new work, and an empty locally resolved ordinary/native set
+    produces `--no-tools` rather than silently inheriting tools.
+30. The complete locally finalized ordinary/native tool set is passed to the child as Pi's
+    `--tools` allowlist (`--no-tools` only when that local set is empty). Pi 0.86.0 is the verified baseline for built-in, extension
     and late-registered tool enforcement; a host that cannot honor the allowlist is
     refused rather than silently weakened, and no older release is advertised as
     equivalent.
     Startup verification is the enforcement companion: the Pi adapter supplies a
     package-local preflight extension plus a bounded non-secret expectation, verifies that
     the nonce-specific bootstrap command exists from the expected package source, then
-    requires the child to acknowledge the exact selected model, active ordinary direct tools
-    and registered official native definitions (including the existing nested-tool source
-    check) before the real task prompt is sent. Native definitions may be host-inactive;
-    every active name must still be in the finalized allowlist. The derived native subset
-    must agree across task/manifest, and registration proof is explicit and bounded. It is
-    not a caller field, per-model tool plan or persisted executable policy. Missing or
-    mismatched acknowledgement is a capability/startup diagnostic, never compensated by
-    broadening tools or choosing another model. Every ranked replacement gets fresh
-    attestation against the same ordinary/native sets before the task prompt. Hidden tools
-    are excluded, missing exposure defaults to direct, and unknown present exposure values
-    are dropped. No user name list, source preset, forced activation or indefinite activation
-    wait is introduced.
+    requires the child to acknowledge the exact selected model and bounded capability
+    evidence before the real task prompt is sent. Child-effective tools are the intersection
+    of the finalized candidate allowlist with observed ordinary activity and native
+    registration; native activity may remain host-inactive because Pi owns it. Candidate
+    omissions are recorded in bounded diagnostics and are non-fatal by default, while
+    explicit caller-requested (`forcedTools`) omissions fail closed. Active names outside
+    the finalized allowlist, duplicate/malformed evidence, wrong source/model/nonce or
+    wrong nested-tool provenance remain hard failures. The derived native and forced subsets
+    must agree across task/manifest, and proof is explicit and bounded. This contract is not
+    a caller field, per-model tool plan, selector capability grant or persisted executable
+    policy. Missing or mismatched acknowledgement is never compensated by broadening tools
+    or choosing another model. Every ranked replacement gets fresh negotiation against the
+    same immutable candidate/native/forced sets before the task prompt. Hidden tools are
+    excluded, missing exposure defaults to direct, and unknown present exposure values are
+    dropped. No user name list, source preset or indefinite activation wait is introduced.
 31. An absolute task deadline is created before preflight/selection, and routing, setup,
     queue and retries all count against it. Pending selector work is tracked per session
     runtime, aborted on cancellation, shutdown or session switch, and every post-await

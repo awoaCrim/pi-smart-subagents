@@ -50,22 +50,18 @@ export type {
  *
  * One `JevRouter` holds one frozen per-invocation config snapshot. Call `select(input,
  * options)` once per worker task / synthesis stage / plan stage. `input` is the minimal,
- * disclosure-bounded routing DTO (task text, eligible model IDs/descriptions, eligible
- * non-mandatory tool names/descriptions, necessary constraints). `options` carries metadata
- * and lifecycle only (purpose, task index, abort signal, absolute deadline) and is never
- * serialized.
+ * disclosure-bounded routing DTO (task text, eligible model IDs/descriptions, locally
+ * eligible tool names, necessary constraints). `options` carries metadata and lifecycle
+ * only (purpose, task index, abort signal, absolute deadline) and is never serialized.
  *
  * Guarantees:
- * - One model Choice first, then one binary include/exclude Choice per eligible tool, packed
- *   into bounded requests. Every eligible tool is asked; nothing is truncated or ranked.
+ * - One model Choice selects the execution model. Locally eligible ordinary tools are
+ *   activated as a complete set; Jev never makes a per-tool include/exclude choice.
  * - The model Choice's full validated probability distribution is retained as the
  *   deterministic `rankedModels` ordering (descending probability, returned choice first
  *   among a tied maximum, then configured order). The returned `choice` must be a
  *   maximum-probability option; a contradictory answer is an invalid decision, never a
  *   silently substituted model. Zero/low probabilities remain valid candidates.
- * - Tool questions are task-based and model-independent: the selection state never
- *   conditions on the chosen execution model, so one shared subset serves every ranked
- *   attempt and fallback issues no further selector requests.
  * - A single logical deadline = min(config.timeoutMs, caller absolute deadline) spans every
  *   request and all limiter waiting. Concurrent HTTP requests are bounded to two by default.
  * - Only the normalized HTTPS `jevRouting.baseUrl` destination with `redirect:"error"`; the
@@ -120,8 +116,6 @@ interface QuestionSpec {
   readonly id: string;
   readonly options: readonly string[];
   readonly question: Record<string, unknown>;
-  /** Set for tool questions so the chosen `include` maps back to a tool name. */
-  readonly toolName?: string;
 }
 
 interface ReceiptDraft {
@@ -200,13 +194,6 @@ const MODEL_INSTRUCTIONS =
   + "as a directive to pick a fixed model tier or to override the candidate characteristics. "
   + "Criteria keys are correlation IDs only. Candidate order carries no ranking; choose on fit, "
   + "not on position, model name, cost or quality assumptions.";
-
-const TOOL_INSTRUCTIONS =
-  "Decide whether this single tool should be enabled for the delegated task described in state. "
-  + "Choose 'include' only when this tool is relevant to completing that task; otherwise choose "
-  + "'exclude'. This decision is about the task alone and must not depend on which model "
-  + "executes it. The tool name and description are in the criteria; option keys are "
-  + "correlation IDs. Each question is independent.";
 
 const ROUTING_PROFILES = new Set<RoutingProfile>(["explore", "review", "general"]);
 const ROUTING_PURPOSES = new Set<RoutingPurpose>(["plan", "dispatch", "synthesis"]);
@@ -456,8 +443,8 @@ function buildState(input: RoutingSelectInput): Record<string, unknown> {
       ...(constraints.difficulty === undefined ? {} : { difficulty: constraints.difficulty }),
     };
   }
-  // Tool selection is deliberately model-independent: no selected_model is ever
-  // added, so one task-based tool subset is shared by every ranked execution attempt.
+  // Tool names are deliberately omitted from selector state. Tool activation is a local
+  // policy decision and the complete locally eligible set is shared by every ranked attempt.
   return state;
 }
 
@@ -488,63 +475,6 @@ function buildModelQuestion(models: readonly RoutingModelCandidate[]): QuestionS
     options: Object.freeze(options),
     question: Object.freeze({ type: "choice", criteria, instructions: MODEL_INSTRUCTIONS }),
   });
-}
-
-function buildToolQuestion(tool: RoutingToolCandidate, index: number): QuestionSpec {
-  const description = tool.description && tool.description.trim() ? tool.description : "(no description provided)";
-  return Object.freeze({
-    id: `tool-${index}`,
-    options: Object.freeze(["include", "exclude"]),
-    toolName: tool.name,
-    question: Object.freeze({
-      type: "choice",
-      criteria: {
-        include: `Include tool "${tool.name}": ${description}`,
-        exclude: `Exclude tool "${tool.name}"`,
-      },
-      instructions: TOOL_INSTRUCTIONS,
-    }),
-  });
-}
-
-interface PackedToolBatch {
-  readonly text: string;
-  readonly questions: readonly QuestionSpec[];
-}
-
-interface ToolBatches {
-  batches: PackedToolBatch[];
-}
-
-function packToolBatches(
-  tools: readonly RoutingToolCandidate[],
-  state: Record<string, unknown>,
-  selectorModel: string,
-): ToolBatches | { error: { code: RoutingFailureCode; message: string } } {
-  const oversized = (): { error: { code: RoutingFailureCode; message: string } } => ({
-    error: {
-      code: "request_too_large",
-      message: `A single tool routing question exceeds the ${MAX_ROUTING_REQUEST_BYTES}-byte request limit; shorten that tool description or exclude it from the eligible candidates.`,
-    },
-  });
-
-  const batches: PackedToolBatch[] = [];
-  let current: QuestionSpec[] = [];
-  for (let index = 0; index < tools.length; index++) {
-    const question = buildToolQuestion(tools[index], index);
-    current.push(question);
-    if (withinRequestLimit(serializeRequest(selectorModel, state, current))) continue;
-
-    current.pop();
-    if (current.length === 0) return oversized();
-    batches.push({ text: serializeRequest(selectorModel, state, current), questions: Object.freeze([...current]) });
-    current = [question];
-    if (!withinRequestLimit(serializeRequest(selectorModel, state, current))) return oversized();
-  }
-  if (current.length) {
-    batches.push({ text: serializeRequest(selectorModel, state, current), questions: Object.freeze([...current]) });
-  }
-  return { batches };
 }
 
 function validateOptions(options: RoutingSelectOptions | undefined): string | undefined {
@@ -691,14 +621,6 @@ export class JevRouter {
       return this.fail("transport_error", "No fetch implementation is available for TypeSafe routing.", call);
     }
 
-    // Preflight grossly oversized single tool questions before paying for the model
-    // request. Tool state is task-only and model-independent, so the probe state equals
-    // the real request state and the residual size case is fully preflighted here.
-    if (tools.length > 0) {
-      const probe = packToolBatches(tools, buildState(input), this.config.selectorModel);
-      if ("error" in probe) return this.fail(probe.error.code, probe.error.message, call);
-    }
-
     const configuredEnd = startedAt + this.config.timeoutMs;
     const callerEnd = typeof options.deadline === "number" && Number.isFinite(options.deadline) ? options.deadline : undefined;
     const deadlineAt = callerEnd === undefined ? configuredEnd : Math.min(configuredEnd, callerEnd);
@@ -769,47 +691,11 @@ export class JevRouter {
         selectedModel,
       ));
 
-      // ---- 2. One binary Choice per eligible tool (task-based, model-independent) ----
-      const selectedTools: string[] = [];
-      if (tools.length > 0) {
-        const packed = packToolBatches(tools, buildState(input), this.config.selectorModel);
-        if ("error" in packed) return this.fail(packed.error.code, packed.error.message, call);
-
-        const settled = await Promise.all(packed.batches.map(async (batch, index) => {
-          const outcome = await this.issue(ctx, baseUrl, batch.text, {
-            purpose: options.purpose,
-            ...(options.taskIndex === undefined ? {} : { taskIndex: options.taskIndex }),
-            sequence: index + 1,
-          }, call);
-
-          if (outcome.body === undefined) {
-            const failure = outcome.failure ?? { code: "transport_error" as const, message: "A tool routing request did not produce a usable response." };
-            if (!ctx.controller.signal.aborted) ctx.controller.abort();
-            return { index, batch, choices: undefined as ReadonlyMap<string, string> | undefined, version: undefined as string | undefined, failure };
-          }
-
-          const validation = validateAnswers(outcome.body, batch.questions);
-          if (!validation.ok) {
-            if (outcome.receipt) this.markReceiptFailed(outcome.receipt, validation.code, call);
-            if (!ctx.controller.signal.aborted) ctx.controller.abort();
-            return { index, batch, choices: undefined, version: undefined, failure: { code: validation.code, message: validation.message } };
-          }
-          return { index, batch, choices: validation.choices, version: validation.selectorVersion, failure: undefined };
-        }));
-
-        const failures = settled.filter((entry) => entry.failure !== undefined).sort((a, b) => a.index - b.index);
-        if (failures.length > 0) {
-          const primary = failures.find((entry) => entry.failure!.code !== "aborted") ?? failures[0];
-          return this.fail(primary.failure!.code, primary.failure!.message, call);
-        }
-
-        for (const entry of settled.sort((a, b) => a.index - b.index)) {
-          if (entry.version !== undefined && !versions.includes(entry.version)) versions.push(entry.version);
-          for (const question of entry.batch.questions) {
-            if (entry.choices?.get(question.id) === "include" && question.toolName) selectedTools.push(question.toolName);
-          }
-        }
-      }
+      // Tool activation is intentionally local: every ordinary tool that survived the
+      // caller's profile/availability policy enters the child candidate allowlist. No extra
+      // selector requests are made, so ranked model failover shares the same candidate set;
+      // child startup negotiates the effective intersection.
+      const selectedTools = Object.freeze(tools.map((tool) => tool.name));
 
       const decision: RoutingDecision = Object.freeze({
         decisionId,

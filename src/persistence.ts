@@ -8,7 +8,7 @@ import {
   validateModelRanking,
 } from "./model-failover.js";
 import { MAX_ROUTING_MODEL_ID_LENGTH, MAX_ROUTING_TOOL_QUESTIONS, type RankedModelOption, type RoutingReceipt } from "./routing-types.js";
-import type { ChildProcessIdentity, ModelAttemptRecord, ModelFailureCategory, RunMode, RunSnapshot, RunState, TaskProfile, TaskRouting, TaskSpec, TimeoutPhase, ToolActivity, UsageStats } from "./types.js";
+import type { ChildProcessIdentity, ModelAttemptRecord, ModelFailureCategory, RunMode, RunSnapshot, RunState, TaskProfile, TaskRouting, TaskSpec, TimeoutPhase, ToolActivity, ToolNegotiationDiagnostics, UsageStats } from "./types.js";
 import { emptyUsage } from "./types.js";
 import { isThinkingLevel } from "./thinking.js";
 
@@ -52,6 +52,7 @@ const MAX_ROUTING_ID_LENGTH = 256;
 const MAX_ROUTING_VERSION_LENGTH = 128;
 const MAX_ROUTING_MODEL_LENGTH = 256;
 const MAX_ROUTING_LIST = 256;
+const MAX_TOOL_DIAGNOSTIC_NAMES = 512;
 
 const TOOL_ACTIVITY_STATES = ["none", "started", "unknown"] as const;
 const MODEL_FAILURE_CATEGORIES: readonly ModelFailureCategory[] = [
@@ -387,6 +388,8 @@ export interface PersistedResult {
   attemptedModels?: string[];
   /** Sticky tool-activity boundary state across the task's attempts. */
   toolActivity?: ToolActivity;
+  /** Child capability negotiation; omitted tools are non-fatal unless forced. */
+  toolDiagnostics?: ToolNegotiationDiagnostics;
   /** Bounded ranked attempt history; previews capped, never executable. */
   modelAttempts?: ModelAttemptRecord[];
   /** Parsed structured result when output_schema validated. */
@@ -541,6 +544,42 @@ export function normalizeAttemptedModels(value: unknown): string[] | undefined {
   return models;
 }
 
+/** Bounded compatibility decode for child capability-negotiation diagnostics. */
+export function normalizeToolDiagnostics(value: unknown): ToolNegotiationDiagnostics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const read = (input: unknown): string[] | undefined => {
+    if (!Array.isArray(input) || input.length > MAX_TOOL_DIAGNOSTIC_NAMES) return undefined;
+    const names: string[] = [];
+    for (const entry of input) {
+      const name = routingString(entry, MAX_ROUTING_MODEL_LENGTH);
+      if (!name) return undefined;
+      names.push(name);
+    }
+    return new Set(names).size === names.length ? names : undefined;
+  };
+  const candidateTools = read(raw.candidateTools);
+  const effectiveTools = read(raw.effectiveTools);
+  const omittedTools = read(raw.omittedTools);
+  const forcedTools = read(raw.forcedTools);
+  if (!candidateTools || !effectiveTools || !omittedTools || !forcedTools) return undefined;
+  const candidate = new Set(candidateTools);
+  const effective = new Set(effectiveTools);
+  const omitted = new Set(omittedTools);
+  if (effectiveTools.some((name) => !candidate.has(name))
+    || omittedTools.some((name) => !candidate.has(name))
+    || forcedTools.some((name) => !candidate.has(name))
+    || effectiveTools.some((name) => omitted.has(name))
+    || effective.size + omitted.size !== candidate.size
+    || candidateTools.some((name) => !effective.has(name) && !omitted.has(name))) return undefined;
+  return Object.freeze({
+    candidateTools: Object.freeze(candidateTools),
+    effectiveTools: Object.freeze(effectiveTools),
+    omittedTools: Object.freeze(omittedTools),
+    forcedTools: Object.freeze(forcedTools),
+  });
+}
+
 function normalizeResult(value: unknown): PersistedResult | undefined {
   if (!value || typeof value !== "object") return undefined;
   const r = value as Partial<PersistedResult>;
@@ -581,6 +620,7 @@ function normalizeResult(value: unknown): PersistedResult | undefined {
     toolActivity: (TOOL_ACTIVITY_STATES as readonly string[]).includes(String((r as { toolActivity?: unknown }).toolActivity))
       ? (r as { toolActivity?: ToolActivity }).toolActivity
       : undefined,
+    toolDiagnostics: normalizeToolDiagnostics((r as { toolDiagnostics?: unknown }).toolDiagnostics),
     modelAttempts: normalizeModelAttempts((r as { modelAttempts?: unknown }).modelAttempts),
     structuredOutput: r.structuredOutput !== undefined && Buffer.byteLength(JSON.stringify(r.structuredOutput) ?? "", "utf8") <= 32_768
       ? r.structuredOutput

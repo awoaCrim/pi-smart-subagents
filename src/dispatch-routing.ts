@@ -2,7 +2,7 @@ import type { JevRouter } from "./jev-router.js";
 import { finalizeRoutedTasks, type PreparedTask, type ResolvedTask } from "./policy.js";
 import type { RoutingModelCandidate, RoutingPurpose, RoutingToolCandidate } from "./routing-types.js";
 
-/** Frozen catalog projection: no tool schema, executable, path or credential crosses the selector. */
+/** Frozen catalog projection: tools are local activation data; no tool schema, executable, path or credential crosses the selector. */
 export interface RoutingCatalog {
   readonly models: readonly RoutingModelCandidate[];
   readonly tools: readonly RoutingToolCandidate[];

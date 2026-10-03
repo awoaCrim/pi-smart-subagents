@@ -1,6 +1,6 @@
 ---
 name: subagent
-description: Delegate work to isolated child agents with the subagent tool. Jev routes each new dispatch to an execution model and individual tools from the user's configured candidate list; covers explore/review/general profiles, parallel fanout with best-effort synthesis, worktree isolation and the diff/apply/discard loop, background runs, steering, output_schema, context fork, and the Pi-only new-dispatch rule. Use when delegating exploration or implementation, running tasks in parallel, or when a subagent run needs inspecting, steering, or landing.
+description: Delegate work to isolated child agents with the subagent tool. Jev routes each new dispatch to an execution model while local policy activates the complete permitted tool set; covers explore/review/general profiles, parallel fanout with best-effort synthesis, worktree isolation and the diff/apply/discard loop, background runs, steering, output_schema, context fork, and the Pi-only new-dispatch rule. Use when delegating exploration or implementation, running tasks in parallel, or when a subagent run needs inspecting, steering, or landing.
 ---
 
 # Subagent
@@ -21,8 +21,8 @@ from isolation, parallelism, or a fresh context.
 
 ```ts
 // Omit model and fallback_models. Jev selects the execution model from the
-// user's configured candidate list and the individual tools from the locally
-// permitted catalog. An explicit model/fallback is rejected on new work.
+// user's configured candidate list. Local policy activates the complete tool set
+// permitted for the task. An explicit model/fallback is rejected on new work.
 
 // Single foreground task (default profile: general)
 { task: "Find call sites of parseConfig", description: "Map parseConfig" }
@@ -61,27 +61,28 @@ from isolation, parallelism, or a fresh context.
 | --------- | --------------------------------------------------------- | ------------------------------------------- |
 | `explore` | locally permitted read-only tools                         | no project-file writes                      |
 | `review`  | same as explore                                           | no project-file writes                      |
-| `general` | Jev chooses from the parent's active locally permitted catalog | yes if the selected tools include bash/edit/write |
+| `general` | all active locally permitted ordinary tools after explicit-tool policy | yes if the local set includes bash/edit/write |
 
-Jev picks individual tool names, not a capability bundle. Ordinary candidates come
-from active `direct` definitions in one Pi `getAllTools()` + active-name snapshot,
-not from agent `tools` defaults. `hidden` definitions are excluded. Pi's official
-`model-only`, `codemode` and `deferred` definitions are native managed tools: they are
-not selector choices, are carried automatically, and must be registered in the child
-while Pi controls their activity. Direct SDK/custom tools remain ordinary candidates;
-source metadata and annotations do not prove safety. An explicit `tools` list is an
-ordinary ceiling. Explore/review reject ordinary writers, and an empty ordinary selection
-never means "all tools".
+Local policy activates the complete ordinary tool set that survives active `direct`
+metadata, profile restrictions and an explicit `tools` ceiling; it is not a Jev per-tool
+selection. `hidden` definitions are excluded. Pi's official `model-only`, `codemode` and
+`deferred` definitions are native managed tools: they are not selector choices, are
+carried automatically, and their child-registration evidence is negotiated while Pi
+controls their activity; an unforced missing definition is recorded as omitted. Direct SDK/custom tools remain ordinary local capabilities; source metadata and
+annotations do not prove safety. Explore/review reject ordinary writers. A local empty
+ordinary/native set produces `--no-tools`, while permitted active tools are not dropped by
+selector choice.
 
-The full finalized allowlist (ordinary direct names plus derived native names) is
-passed to the child as Pi's `--tools` set (`--no-tools` when empty). Pi's official
-exposure semantics control how native names participate; startup verifies their
-registration without requiring them to appear active. Pi 0.86.0 is the verified baseline
-for built-in, extension and late-registered tool enforcement; an unsupported host is
-refused rather than silently weakened. Before the real task prompt, startup verifies the
-model, exact ordinary active set and nested-tool source. Active names outside the finalized
-allowlist, missing registration, malformed evidence or source/model/nonce mismatch stops
-the child before task work.
+The full finalized candidate allowlist (ordinary direct names plus derived native names)
+is passed to the child as Pi's `--tools` set (`--no-tools` when empty). Pi's official
+exposure semantics control how native names participate; startup negotiates the effective
+intersection from ordinary-active and native-registration evidence. Pi 0.86.0 is the
+verified baseline for built-in, extension and late-registered tool enforcement; an
+unsupported host is refused rather than silently weakened. Before the real task prompt,
+startup verifies the model and nested-tool source, records unforced candidate omissions in
+bounded diagnostics, and fails closed when an explicitly requested tool is missing. Active
+names outside the finalized allowlist, malformed evidence or a source/model/nonce mismatch
+still stops the child before task work.
 Older hosts without exposure metadata use Pi's default `direct` behavior; unknown present
 exposure values are dropped rather than guessed. No user tool-name config is needed.
 
@@ -91,8 +92,8 @@ Parallel write-capable tasks sharing one checkout are rejected unless each uses
 ## Runtime
 
 New extension-managed dispatch runs through Pi's RPC child runtime. Jev selects
-an execution model and ordinary locally permitted tools; the extension does not
-add hidden tools or switch to another child runtime. Unsupported capability
+an execution model only; local policy activates ordinary locally permitted tools, and the
+extension does not add hidden tools or switch to another child runtime. Unsupported capability
 combinations are **refused**, not silently degraded:
 
 |                          | Pi            |
@@ -126,9 +127,11 @@ combinations are **refused**, not silently degraded:
 
 Omit `model` and `fallback_models` on every new call: both are legacy fields,
 and an explicit value is rejected rather than bypassing selection. Jev chooses
-an initial execution model and probabilities for the user's eligible candidates, plus one task-based include/exclude decision per eligible tool shared by all attempts. The local policy then re-validates
-the answer: unknown or unsafe tools cannot launch, explore/review stay read-only,
-and management actions need no routing config or credential.
+an initial execution model and probabilities for the user's eligible candidates. Local policy
+then resolves the complete ordinary/native tool set from active availability, profile and
+explicit-tool constraints; no tool names or descriptions are sent to Jev and no per-tool
+include/exclude decision is made. Explore/review stay read-only, and management actions
+need no routing config or credential.
 
 A Jev timeout or invalid decision still stops new dispatch; there is no emergency model. A valid route retains every candidate probability and tries higher values first. Tied maxima keep the returned choice first; other ties follow configured order. Low confidence and zero probability are accepted, not thresholds. Per-model probability is a selector preference, not uptime or a separate confidence score.
 

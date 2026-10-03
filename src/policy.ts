@@ -256,6 +256,13 @@ function normalizeTask(
       ? agent.name
       : `task-${index + 1}`;
   const systemPrompt = [agent?.systemPrompt, item.system_prompt].filter(Boolean).join("\n\n") || undefined;
+  // An explicit caller tool list is a required capability contract. The default
+  // locally derived candidate set remains negotiable because a child may omit a
+  // parent-only extension without making the whole dispatch unusable.
+  const candidateTools = [...new Set(resolved.tools)];
+  const forcedTools = requestedTools === undefined
+    ? EMPTY_TOOL_NAMES
+    : Object.freeze([...candidateTools]);
 
   // Adapter capability gate. Refuse combinations the child adapter cannot honor
   // rather than silently dropping a budget or a read-only guarantee.
@@ -269,7 +276,7 @@ function normalizeTask(
       // Only report a tool-restriction problem when the profile actually
       // restricts: profile 'general' inherits the parent set and does not
       // promise a read-only sandbox.
-      tools: profile === "general" ? undefined : resolved.tools,
+      tools: profile === "general" ? undefined : candidateTools,
       thinking: effectiveThinking,
       outputSchema: item.output_schema ?? agent?.outputSchema,
       profile,
@@ -292,7 +299,8 @@ function normalizeTask(
       parentThinking: parent.thinking,
       thinking: requestedThinking,
       difficulty,
-      candidateTools: resolved.tools,
+      candidateTools,
+      forcedTools,
       nativeTools: Object.freeze([...nativeTools]),
       profile,
       cwd,
@@ -322,7 +330,7 @@ function normalizeTask(
 
         ...(agent ? [`agent=${agent.name}`] : []),
         "routing=jev (pending)",
-        ...(nativeTools.length ? [`nativeTools=[${nativeTools.join(",")}] (official Pi exposure; registration required)`] : []),
+        ...(nativeTools.length ? [`nativeTools=[${nativeTools.join(",")}] (official Pi exposure; registration negotiated)`] : []),
       ],
     },
   };
@@ -543,27 +551,28 @@ export function finalizeRoutedTasks(
     const decision = decisions[index]!;
     const candidate = models.find((entry) => entry.model === decision.selectedModel);
     if (!candidate) return { ok: false, error: `Task ${index + 1}: selector chose a model outside the available dedicated candidates.` };
-    if (new Set(decision.selectedTools).size !== decision.selectedTools.length || decision.selectedTools.some((tool) => !item.candidateTools.includes(tool))) {
-      return { ok: false, error: `Task ${index + 1}: selector chose tools outside the locally permitted candidates.` };
-    }
+    // Tool activation is local and deterministic: every ordinary tool that survived
+    // profile/availability policy is passed to the child. Jev selects the model only;
+    // `decision.selectedTools` remains route metadata and is never a capability grant.
+    const ordinaryTools = [...item.candidateTools];
     const nativeTools = item.nativeTools === undefined ? EMPTY_TOOL_NAMES : item.nativeTools;
     if (!isToolNameSubset(nativeTools, nativeTools)
       || nativeTools.some((tool) => item.candidateTools.includes(tool))) {
       return { ok: false, error: `Task ${index + 1}: invalid locally prepared native tool set; prepare the task again.` };
     }
-    const tools = [...decision.selectedTools, ...nativeTools];
+    const tools = [...ordinaryTools, ...nativeTools];
     Object.freeze(tools);
     // Native tools retain Pi's official host semantics and do not alter the
     // ordinary writer classification. Ordinary unknown tools still count as writers.
-    const canWrite = decision.selectedTools.some((tool) => !NON_WRITING_TOOLS.has(tool));
-    if (item.profile !== "general" && canWrite) return { ok: false, error: `Task ${index + 1}: writable selector choice violates ${item.profile}.` };
+    const canWrite = ordinaryTools.some((tool) => !NON_WRITING_TOOLS.has(tool));
+    if (item.profile !== "general" && canWrite) return { ok: false, error: `Task ${index + 1}: local tool resolution violates ${item.profile}.` };
     // The probability ranking is mandatory for every new route: without it there
     // is no failover plan, and a persisted/legacy decision shape must never be
     // silently re-promoted into one.
     const ranked = decision.rankedModels;
     const rankingProblem = validateModelRanking(ranked, models.map((entry) => entry.model), decision.selectedModel);
     if (rankingProblem) return { ok: false, error: `Task ${index + 1}: ${rankingProblem}.` };
-    const { candidateTools: _candidates, nativeTools: _nativeTools, requestedThinking, parentThinking, ...spec } = item;
+    const { candidateTools: _candidates, forcedTools: _forcedTools, nativeTools: _nativeTools, requestedThinking, parentThinking, ...spec } = item;
     // One frozen attempt plan per ranked candidate: same shared tools and route,
     // per-candidate thinking under agent > profile > candidate > difficulty > parent.
     const modelAttemptPlan: ModelAttemptSpec[] = [];
@@ -587,10 +596,12 @@ export function finalizeRoutedTasks(
       && firstCandidate.thinking === undefined
       && first.thinking === autoThinking;
     tasks.push({
-      ...spec, model: candidate.model, thinking: first.thinking, nativeTools: Object.freeze([...nativeTools]), tools, effectiveTools: tools, canWrite,
+      ...spec, model: candidate.model, thinking: first.thinking,
+      forcedTools: Object.freeze([...(item.forcedTools ?? EMPTY_TOOL_NAMES)]),
+      nativeTools: Object.freeze([...nativeTools]), tools, effectiveTools: tools, canWrite,
       fallbackModels: [],
       modelAttemptPlan: Object.freeze(modelAttemptPlan),
-      routing: { ...decision, outcome: "success" },
+      routing: { ...decision, selectedTools: Object.freeze([...ordinaryTools]), outcome: "success" },
       resolutionNotes: [
         ...item.resolutionNotes.filter((note) => !note.startsWith("routing=")),
         "routing=jev",

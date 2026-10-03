@@ -95,6 +95,19 @@ export interface ModelAttemptSpec {
 }
 
 /**
+ * Provider-free child-tool capability negotiation recorded after startup.
+ * `candidateTools` is the finalized parent-side allowlist; `effectiveTools` is
+ * the bounded intersection proven by the child; omitted names are diagnostic
+ * only unless they also appear in `forcedTools`.
+ */
+export interface ToolNegotiationDiagnostics {
+  readonly candidateTools: readonly string[];
+  readonly effectiveTools: readonly string[];
+  readonly omittedTools: readonly string[];
+  readonly forcedTools: readonly string[];
+}
+
+/**
  * Bounded descriptive history for one ranked/legacy attempt. Records are not
  * a second usage ledger (TaskResult.usage stays cumulative) and never become
  * executable: they carry the reason for a switch, the session pointer for
@@ -126,8 +139,15 @@ export interface TaskSpec {
   /** Optional difficulty hint forwarded to Jev; local policy may derive a thinking default. */
   difficulty?: TaskDifficulty;
   tools?: string[];
+  /**
+   * Internal explicit caller-requested tool names. Unlike the complete candidate
+   * allowlist, these names are required during child capability negotiation.
+   * Never accepted from the public request schema directly.
+   */
+  forcedTools?: readonly string[];
   /** Internal frozen names derived from Pi's official non-direct exposure metadata.
-   * Definitions must be registered in the child; Pi owns whether they are active. */
+   * Child registration is capability evidence; unforced missing names are omitted, and Pi
+   * owns whether registered native definitions are active. */
   nativeTools?: readonly string[];
   profile: TaskProfile;
   canWrite?: boolean;
@@ -216,6 +236,8 @@ export interface TaskResult {
   attemptedModels?: string[];
   /** Sticky current-invocation tool activity across this task's attempts. */
   toolActivity?: ToolActivity;
+  /** Child capability negotiation; omitted tools are non-fatal unless forced. */
+  toolDiagnostics?: ToolNegotiationDiagnostics;
   /**
    * Bounded errorMessage + primitive diagnostics.error.code from the latest
    * completed assistant provider error. Set only for stopReason "error";

@@ -45,7 +45,7 @@ export const TaskFields = {
   model: Type.Optional(Type.String({ description: "Legacy field: omit on new work. Jev chooses from the dedicated configured model list; explicit model is rejected rather than bypassing routing." })),
   // Thinking is deliberately absent: model callers cannot override trusted
   // agent/profile/candidate defaults through the request body.
-  tools: Type.Optional(Type.Array(Type.String({ description: "Ordinary direct tool name." }), { description: "Optional ordinary-candidate ceiling for Jev. Default candidates are the parent's active direct tools; Pi's official native exposure tools are carried automatically and are not caller-selected." })),
+  tools: Type.Optional(Type.Array(Type.String({ description: "Ordinary direct tool name." }), { description: "Optional ordinary-candidate ceiling for local policy; when provided, every named ordinary tool is a required child capability. Default candidates are the parent's active direct tools; Pi's official native exposure tools are carried automatically and are not caller-selected." })),
   profile: Type.Optional({ ...Profile, description: "Capability profile: explore/review cannot write project files; general permits Jev to choose from the parent's active direct catalog and may write. Pi-native non-direct tools retain host-owned exposure semantics." }),
   difficulty: Type.Optional({
     ...Difficulty,

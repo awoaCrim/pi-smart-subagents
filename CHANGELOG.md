@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.11.12 — 2026-10-03
+
+### Child capability negotiation
+
+- Negotiate the child-effective tool set as the bounded intersection of the locally finalized candidate allowlist and child evidence, recording unforced omissions in result diagnostics instead of aborting startup.
+- Treat explicit caller `tools` names as forced capability requirements: a missing forced name fails closed, while active names outside the candidate set, malformed evidence and provenance mismatches remain hard failures.
+- Persist bounded tool diagnostics across checkpoints and terminal snapshots without changing Jev's model-only selection or Pi's host-owned native-tool activity.
+
+## 0.11.11 — 2026-10-03
+
+### Routing wording correction
+
+- Clarify the remaining reference and security wording: Jev selects only the execution model; local active/profile/explicit-tool policy resolves the complete ordinary tool set; Pi native tool activity remains host-owned.
+- Clarify that selector receipt limits and route metadata describe local tool activation, not Jev per-tool choices.
+
+## 0.11.10 — 2026-10-03
+
+### Routing documentation synchronization
+
+- Align README, reference, security, architecture and bundled skill guidance with the 0.11.9 routing behavior: Jev selects the execution model only, while local active/profile/explicit-tool policy activates the complete ordinary child tool set and Pi continues to own native tool activity.
+- Remove stale claims that tool names and descriptions are sent to Jev, that Jev makes per-tool include/exclude choices, or that an empty selector choice is the capability source for `--no-tools`.
+
+## 0.11.9 — 2026-10-03
+
+### Local full-tool activation for Jev routing
+
+- Make Jev select only the execution model; remove per-tool `include`/`exclude` selector requests and keep tool descriptions out of selector HTTP payloads.
+- Activate every ordinary tool that survives local active-availability, profile and explicit caller-tool policy for the child, while preserving Pi-owned native tool registration and host activity semantics.
+- Keep route metadata aligned with the actual local tool set so displayed and persisted routing records no longer imply that Jev granted capabilities.
+
 ## 0.11.8 — 2026-10-01
 
 ### Request-boundary safety

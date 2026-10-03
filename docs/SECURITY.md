@@ -8,9 +8,9 @@ and can use tools according to their capability profile.
 
 | Profile | Finalized tools | Writes? |
 |---------|-----------------|---------|
-| `explore` | Jev-chosen subset of locally permitted read-only candidates | No project-file writes |
+| `explore` | All locally permitted active read-only tools | No project-file writes |
 | `review` | Same as explore | No project-file writes |
-| `general` | Jev-chosen subset of the parent's active locally permitted catalog | Yes if write-capable tools are selected |
+| `general` | All active locally permitted ordinary tools after explicit-tool policy | Yes if the local set includes write-capable tools |
 
 Parallel mode defaults to `explore` to avoid concurrent shared writes. Tool exposure follows Pi's official metadata: native non-direct definitions are carried for registration without being treated as ordinary profile candidates, while ordinary direct-tool safety remains fail-closed.
 
@@ -18,16 +18,19 @@ Parallel mode defaults to `explore` to avoid concurrent shared writes. Tool expo
 
 1. **Read-only means no project-file mutation.** `bash` can rewrite the disk and is never part of
    an explore/review profile. The finalized tools reach the child as Pi's `--tools`
-   allowlist (`--no-tools` when empty), and the selector's answer is re-validated
-   locally: unknown, unavailable, inactive or unsafe choices cannot launch broader
-   capability, and an empty selection never becomes "all tools". Pi 0.86.0 is the
-   verified baseline for built-in, extension and late-registered tool enforcement;
+   allowlist (`--no-tools` only when the locally resolved ordinary/native set is empty).
+   Local policy, not a selector tool answer, determines the ordinary set: active availability,
+   profile restrictions and an explicit `tools` ceiling are applied before launch. Pi 0.86.0
+   is the verified baseline for built-in, extension and late-registered tool enforcement;
    a host that cannot honor the allowlist is refused rather than silently weakened.
-   Before the real task prompt, a package-local startup check verifies the routing
-   bootstrap command source, exact selected model, active ordinary tools and registered
-   official native definitions. Native definitions may be host-inactive; all active names
-   must still be in the finalized allowlist. Missing registration or a mismatch aborts as a
-   capability diagnostic and is never fixed by widening tools or switching models.
+   Before the real task prompt, a package-local startup check verifies the routing bootstrap
+   command source, exact selected model and bounded child capability evidence. The effective
+   set is the intersection of the finalized candidate allowlist with observed ordinary
+   activity and native registration; native definitions may be host-inactive. Unforced
+   candidate omissions are recorded as diagnostics and do not abort, while a missing
+   explicitly requested tool fails closed. Active names outside the finalized allowlist,
+   malformed evidence or a provenance/model/nonce mismatch aborts as a capability diagnostic
+   and is never fixed by widening tools or switching models.
 2. **Parallel writers** require `isolation: "worktree"`, distinct `cwd` values,
    or an explicit `allow_shared_writes: true` opt-in.
 3. **Depth is capped** (`maxDepth`, default 2). Nested children at the ceiling do
@@ -69,27 +72,26 @@ Parallel mode defaults to `explore` to avoid concurrent shared writes. Tool expo
 
 ## Official tool exposure boundary
 
-Pi 0.99.0+ `getAllTools()` metadata is the only classification source for the native boundary. `direct` definitions that are active in the same snapshot are ordinary Jev candidates, including direct SDK/custom tools. `model-only`, `codemode` and `deferred` definitions are native managed tools: the parent carries their registered names automatically, excludes them from Jev's ordinary questions, and requires child registration proof, while Pi controls whether each is active. `hidden` definitions are excluded from both paths. If an older host omits `exposure`, the Pi default `direct` behavior is used; an unknown present exposure value is dropped rather than guessed.
+Pi 0.99.0+ `getAllTools()` metadata is the only classification source for the native boundary. Active `direct` definitions in the same snapshot form the ordinary local capability set, including direct SDK/custom tools; local profile and explicit-tool policy decide which of that set reaches the child. `model-only`, `codemode` and `deferred` definitions are native managed tools: the parent carries their registered names automatically, child registration is observed as bounded capability evidence, and an unforced missing definition is omitted while Pi controls whether each is active. `hidden` definitions are excluded from both paths. If an older host omits `exposure`, the Pi default `direct` behavior is used; an unknown present exposure value is dropped rather than guessed.
 
 `sourceInfo` is retained for provenance and nested-extension attestation only. `annotations`, names and extension source labels never prove that a tool is read-only. Ordinary unknown/custom direct tools remain writer-capable in `general` and are rejected by `explore`/`review` unless they are in the existing conservative read-only set. Native managed tools do not alter ordinary writer classification, and nested `subagent`/`subagent_wait` names remain subject to package depth/spawn policy.
 
-The startup proof checks the exact model and ordinary active set, requires every derived native definition to be registered, permits native activity to be absent or present, and rejects active names outside the finalized allowlist. It also retains source/model/nonce/host checks and nested-tool provenance checks. No user-owned whitelist, source-name preset, forced activation, foreign config discovery or annotation-based sandbox exists.
+The startup proof checks the exact model and negotiates the child-effective set from ordinary-active and native-registration evidence. A candidate absent from the child is recorded as `omittedTools` without aborting by default; an explicitly requested (`forcedTools`) name must be effective or startup fails closed. It rejects active names outside the finalized allowlist and retains source/model/nonce/host checks plus nested-tool provenance checks. No user-owned whitelist, source-name preset, forced activation beyond the explicit request contract, foreign config discovery or annotation-based sandbox exists.
 
 ## Routing disclosure and credentials
 
 Jev routing sends a minimal projection to TypeSafe: the current delegated task
-text, the configured candidate model IDs and your per-model descriptions,
-eligible candidate tool names and descriptions, and necessary constraints
-(profile, the resolved thinking level, whether structured output is needed). It does not
-upload repository files, conversation history, full system prompts, persona text
-or tool parameter schemas, and does not read them in the background. Resume, fork
-and synthesis select from the new task instruction rather than the assembled
-transcript. Task text and model descriptions are user content and can themselves
-contain secrets; there is no guaranteed redaction.
+text, the configured candidate model IDs and your per-model descriptions, and the
+necessary constraints (profile, the resolved thinking level, whether structured output
+is needed). It does not send tool names or descriptions, upload repository files,
+conversation history, full system prompts, persona text or tool parameter schemas, and
+does not read them in the background. Resume, fork and synthesis select from the new
+task instruction rather than the assembled transcript. Task text and model descriptions
+are user content and can themselves contain secrets; there is no guaranteed redaction.
 
 Version `0.10.0` reads the TypeSafe credential from `jevRouting.apiKey` in the private user-level `~/.pi/subagent.json`. This is plaintext storage: restrict file access and protect editor backups and synchronized copies. Same-user processes, including children with filesystem access, may read it. Profiles and worktrees do not protect this file from those processes.
 
-The transport sends the key only as an `Authorization` header to the normalized per-invocation `jevRouting.baseUrl` destination, with `redirect: "error"`. When the field is omitted, the exact official HTTPS endpoint remains the default. A configured destination must be a complete absolute HTTPS URL with a hostname, at most 2048 characters, and no username/password, query, fragment, whitespace or control characters; HTTP and other schemes are rejected before any selector request. A custom destination intentionally changes which service receives the minimal task/model/tool routing disclosure, so it must be trusted accordingly. The URL is configuration-only and is not copied into prompts, selector JSON bodies, argv, child manifests, logs, receipts or results. The key itself is never copied into prompts, selector JSON bodies, argv, child manifests, logs, receipts or results. Never serialize or log the complete routing configuration. Rotate any credential pasted into a transcript or shared in conversation.
+The transport sends the key only as an `Authorization` header to the normalized per-invocation `jevRouting.baseUrl` destination, with `redirect: "error"`. When the field is omitted, the exact official HTTPS endpoint remains the default. A configured destination must be a complete absolute HTTPS URL with a hostname, at most 2048 characters, and no username/password, query, fragment, whitespace or control characters; HTTP and other schemes are rejected before any selector request. A custom destination intentionally changes which service receives the minimal task/model routing disclosure, so it must be trusted accordingly. The URL is configuration-only and is not copied into prompts, selector JSON bodies, argv, child manifests, logs, receipts or results. The key itself is never copied into prompts, selector JSON bodies, argv, child manifests, logs, receipts or results. Never serialize or log the complete routing configuration. Rotate any credential pasted into a transcript or shared in conversation.
 
 Published npm `0.9.0` uses the older environment-based mechanism. In `0.10.0`, `apiKeyEnv` is rejected with manual migration guidance and no environment fallback. Unrelated `PI_SUBAGENT_*` runtime settings remain supported.
 
@@ -108,7 +110,7 @@ duplicate output paths across parallel workers.
 
 Agent files (`.pi/agents/`, `.agents/agents/`, global agent dir) inject their
 body into the child's system prompt and set persona, thinking and budget
-defaults. Model and tool selection come from Jev routing; a legacy
+defaults. Model selection comes from Jev routing; local active/profile/explicit-tool policy resolves the complete ordinary tool set, while Pi native tool activity remains host-owned. A legacy
 `model`/`fallback_models` in frontmatter is ignored. A
 project-level agent file shapes subagent behavior the same way project
 extensions and skills do — review them like code when working in untrusted

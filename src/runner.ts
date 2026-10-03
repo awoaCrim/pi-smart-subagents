@@ -14,7 +14,7 @@ import { addUsage } from "./usage.js";
 import { ProtocolParser, type ProtocolUpdate } from "./protocol.js";
 import { Semaphore } from "./semaphore.js";
 import { defaultConfig } from "./config.js";
-import { isToolNameSubset } from "./pi-tools.js";
+import { isToolNameSubset, NESTED_DISPATCH_TOOLS } from "./pi-tools.js";
 import { DEPTH_ENV_VAR, SPAWNS_ENV_VAR, parseDepth } from "./policy.js";
 import {
   processStartTime,
@@ -42,9 +42,9 @@ import {
   resolvePreflightCommand,
   startupFailure,
   startupTimeoutDetail,
+  negotiatePreflightAck,
   summarizeCommandResolution,
   summarizePreflightProblems,
-  verifyPreflightAck,
   type PreflightExpectation,
 } from "./startup-check.js";
 
@@ -718,7 +718,7 @@ export class ChildRunner {
           return markStartupFailure(
             result,
             "tools_missing",
-            "A routed subagent task must carry the finalized tool allowlist so the child's active set can be verified.",
+            "A routed subagent task must carry the finalized tool candidate allowlist so the child's effective capabilities can be negotiated.",
           );
         }
         // The absolute task deadline is shared across attempts and is honored here,
@@ -923,9 +923,9 @@ export class ChildRunner {
       });
 
       type StartupOutcome =
-        | { kind: "ok"; effectiveThinking?: TaskSpec["thinking"] }
+        | { kind: "ok"; effectiveThinking?: TaskSpec["thinking"]; toolDiagnostics?: TaskResult["toolDiagnostics"] }
         | { kind: "cancelled" }
-        | { kind: "failed"; code: string; detail: string };
+        | { kind: "failed"; code: string; detail: string; toolDiagnostics?: TaskResult["toolDiagnostics"] };
 
       const describeChildExit = (): string => {
         if (!childExited) return "exit status not observed";
@@ -949,7 +949,7 @@ export class ChildRunner {
 
       /**
        * Provider-free startup handshake. Returns `ok` only after the child's active
-       * model and tool set were both proven to match the finalized route.
+       * model and negotiated capability set satisfy the finalized route.
        * Never submits an unverified slash command: an unknown command would be treated
        * as an ordinary model prompt.
        */
@@ -991,7 +991,7 @@ export class ChildRunner {
           if (!sameNameSet(parsed.manifest.tools, spec.tools ?? [])) {
             throw startupFailure(
               "preflight_manifest_mismatch",
-              "The child's startup manifest tool allowlist did not match the finalized route tools.",
+              "The child's startup manifest tool candidate allowlist did not match the finalized route tools.",
             );
           }
           const nativeTools = spec.nativeTools === undefined ? [] : spec.nativeTools;
@@ -1002,10 +1002,26 @@ export class ChildRunner {
               "The child's startup manifest native tool set did not match the locally derived official exposure set.",
             );
           }
+          const forcedTools = spec.forcedTools === undefined ? [] : spec.forcedTools;
+          if (!isToolNameSubset(forcedTools, spec.tools ?? [])
+            || !sameNameSet(parsed.manifest.forcedTools ?? [], forcedTools)) {
+            throw startupFailure(
+              "preflight_manifest_mismatch",
+              "The child's startup manifest forced tool set did not match the locally prepared requirement set.",
+            );
+          }
+          const nestedTools = [...new Set((spec.tools ?? []).filter((tool) => NESTED_DISPATCH_TOOLS.includes(tool)))];
+          if (!sameNameSet(parsed.manifest.nestedTools ?? [], nestedTools)) {
+            throw startupFailure(
+              "preflight_manifest_mismatch",
+              "The child's startup manifest nested-tool set did not match the locally prepared candidate set.",
+            );
+          }
           expectation = {
             nonce: parsed.manifest.nonce,
             model: parsed.manifest.model,
             tools: parsed.manifest.tools,
+            ...(forcedTools.length ? { forcedTools } : {}),
             ...(nativeTools.length ? { nativeTools } : {}),
             nestedTools: parsed.manifest.nestedTools,
             ownEntryPaths: ownExtensionEntryCandidates(),
@@ -1148,13 +1164,19 @@ export class ChildRunner {
             detail: "The child's startup acknowledgement did not carry this invocation's correlation nonce.",
           };
         }
-        const problems = verifyPreflightAck(ack, expectation);
-        if (problems.length > 0) {
-          return { kind: "failed", code: "preflight_ack_rejected", detail: summarizePreflightProblems(problems) };
+        const inspection = negotiatePreflightAck(ack, expectation);
+        if (inspection.problems.length > 0) {
+          return {
+            kind: "failed",
+            code: "preflight_ack_rejected",
+            detail: summarizePreflightProblems(inspection.problems),
+            toolDiagnostics: inspection.diagnostics,
+          };
         }
         return {
           kind: "ok",
           ...(typeof ack.thinking === "string" ? { effectiveThinking: ack.thinking as TaskSpec["thinking"] } : {}),
+          toolDiagnostics: inspection.diagnostics,
         };
       };
 
@@ -1185,6 +1207,10 @@ export class ChildRunner {
       if (startupOutcome.kind === "ok" && startupOutcome.effectiveThinking !== undefined) {
         result.effectiveThinking = startupOutcome.effectiveThinking;
         progress({ effectiveThinking: startupOutcome.effectiveThinking });
+      }
+      if (startupOutcome.kind !== "cancelled" && startupOutcome.toolDiagnostics !== undefined) {
+        result.toolDiagnostics = startupOutcome.toolDiagnostics;
+        progress({ toolDiagnostics: startupOutcome.toolDiagnostics });
       }
       if (startupOutcome.kind === "failed") {
         // Capability mismatch is not transient: never compensate by broadening tools,

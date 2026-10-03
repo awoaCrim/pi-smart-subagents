@@ -41,15 +41,22 @@ export class PiBackend implements BackendAdapter {
   readonly capabilities = PI_CAPABILITIES;
 
   async buildInvocation(spec: TaskSpec, context: BackendLaunchContext): Promise<BackendInvocation> {
-    // A Jev-routed spec requires the provider-free startup check before the real task
-    // prompt: Pi silently drops unknown `--tools` names, so parent catalog knowledge is
-    // not proof of what the child actually loaded.
+    // A Jev-routed spec requires the provider-free capability negotiation before the real
+    // task prompt: Pi silently drops unknown `--tools` names, so parent catalog knowledge
+    // is not proof of what the child actually loaded.
     const routed = spec.routing !== undefined;
     const nativeTools = spec.nativeTools === undefined ? EMPTY_TOOL_NAMES : spec.nativeTools;
+    const forcedTools = spec.forcedTools === undefined ? EMPTY_TOOL_NAMES : spec.forcedTools;
     if (!isToolNameSubset(nativeTools, spec.tools ?? []) || (!routed && nativeTools.length > 0)) {
       throw startupFailure(
         "native_tools_invalid",
         "Official native tools must be a normalized subset of a routed tool allowlist; prepare the task through local routing policy.",
+      );
+    }
+    if (!isToolNameSubset(forcedTools, spec.tools ?? []) || (!routed && forcedTools.length > 0)) {
+      throw startupFailure(
+        "forced_tools_invalid",
+        "Explicitly forced tools must be a normalized subset of a routed tool allowlist; prepare the task through local routing policy.",
       );
     }
     if (routed) {
@@ -62,7 +69,7 @@ export class PiBackend implements BackendAdapter {
       if (!Array.isArray(spec.tools)) {
         throw startupFailure(
           "tools_missing",
-          "A routed subagent task must carry the finalized tool allowlist so the child's active set can be verified.",
+          "A routed subagent task must carry the finalized tool candidate allowlist so the child's effective capabilities can be negotiated.",
         );
       }
     }
@@ -130,6 +137,7 @@ export class PiBackend implements BackendAdapter {
         nonce: createPreflightNonce(),
         model: spec.model!,
         tools: finalizedToolList ?? [],
+        ...(forcedTools.length > 0 ? { forcedTools } : {}),
         ...(nativeTools.length > 0 ? { nativeTools } : {}),
         ...(nestedTools.length > 0 ? { nestedTools } : {}),
       };

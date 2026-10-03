@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SubagentConfig } from "./config.js";
 import type { PersistenceAdapter, PersistedResult } from "./persistence.js";
-import { normalizeAttemptedModels, normalizeModelAttempts, normalizeTaskRouting, PersistenceLayer } from "./persistence.js";
+import { normalizeAttemptedModels, normalizeModelAttempts, normalizeTaskRouting, normalizeToolDiagnostics, PersistenceLayer } from "./persistence.js";
 import type { ProcessLockManager } from "./process-lock.js";
 import type { RunMode, RunSnapshot, RunState, TaskResult, TaskSpec } from "./types.js";
 import { emptyUsage } from "./types.js";
@@ -105,6 +105,7 @@ export function toPersistedResult(result: TaskResult): PersistedResult {
     attempts: result.attempts,
     attemptedModels: normalizeAttemptedModels(result.attemptedModels),
     toolActivity: result.toolActivity,
+    toolDiagnostics: normalizeToolDiagnostics(result.toolDiagnostics),
     // Clone/validate at the projection boundary as well as reload, preserving
     // immutable snapshots and the same producer/decoder preview limits.
     modelAttempts: normalizeModelAttempts(result.modelAttempts),
@@ -145,6 +146,7 @@ function resultFingerprint(result: TaskResult): string {
     result.thinking ?? "",
     result.effectiveThinking ?? "",
     result.toolActivity ?? "",
+    JSON.stringify(result.toolDiagnostics) ?? "",
     JSON.stringify(normalizeModelAttempts(result.modelAttempts)) ?? "",
     JSON.stringify(normalizeAttemptedModels(result.attemptedModels)) ?? "",
   ].join("|");
@@ -190,6 +192,7 @@ export function toCheckpointResult(result: TaskResult): PersistedResult {
     attempts: result.attempts,
     attemptedModels: normalizeAttemptedModels(result.attemptedModels),
     toolActivity: result.toolActivity,
+    toolDiagnostics: normalizeToolDiagnostics(result.toolDiagnostics),
     // Checkpoints carry attempt metadata/pointers only — preview TEXT is
     // persisted exactly once at terminal, so repeated checkpoints stay small.
     modelAttempts: normalizeModelAttempts(result.modelAttempts)?.map((record) => ({

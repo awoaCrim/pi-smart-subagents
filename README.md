@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Run isolated child agents in [Pi](https://pi.dev/), with Jev selecting a model and tools for each task.
+Run isolated child agents in [Pi](https://pi.dev/), with Jev selecting an execution model and local policy activating the complete permitted tool set for each task.
 
 An independent community fork of Luke Parke's `@parke.dev/pi-subagent` from [LukasParke/pi-extensions](https://github.com/LukasParke/pi-extensions/tree/main/packages/pi-subagent). It retains the upstream engine's named agents, parallel and background tasks, worktrees and usage accounting, and adds Jev routing with child capability verification.
 
@@ -26,9 +26,9 @@ Then ask Pi, for example:
 
 > Use a read-only subagent to review this project's directory structure and summarize the main modules.
 
-Jev chooses the model and tools. The optional `jevRouting.baseUrl` setting can point to a trusted complete `https://` SystemOne request URL; when omitted, the official `https://api.typesafe.ai/v1/systemone` endpoint remains the exact default. The value is strictly validated, and changing it changes the destination receiving the minimal routing disclosure. See the [configuration reference](docs/REFERENCE.md#jev-routing) for the full contract.
+Jev chooses the execution model only. Local active-tool, profile and explicit `tools` policy determines the ordinary child candidate set; startup negotiates the child-effective intersection, records unforced omissions without aborting, and fails closed when an explicitly requested tool is absent. Pi-owned native tool activity remains host-controlled. The optional `jevRouting.baseUrl` setting can point to a trusted complete `https://` SystemOne request URL; when omitted, the official `https://api.typesafe.ai/v1/systemone` endpoint remains the exact default. The value is strictly validated, and changing it changes the destination receiving the minimal routing disclosure. See the [configuration reference](docs/REFERENCE.md#jev-routing) for the full contract.
 
-Tool classification uses Pi 0.99.0+'s official `ToolExposure` metadata, not a package-owned infrastructure list. Active `direct` tools (including direct SDK/custom tools) are ordinary Jev candidates; `model-only`, `codemode` and `deferred` definitions are native managed tools carried automatically and required to be registered in the child while Pi controls their activity; `hidden` tools are excluded. Hosts without exposure metadata use Pi's default `direct` behavior. Source metadata and annotations are retained only as provenance/hints, not as write-safety proof. No user config is needed for this classification.
+Tool classification uses Pi 0.99.0+'s official `ToolExposure` metadata, not a package-owned infrastructure list. Active `direct` tools (including direct SDK/custom tools) are the ordinary local capability set and are enabled together after profile and explicit-tool policy; Jev does not make per-tool choices or receive tool descriptions. `model-only`, `codemode` and `deferred` definitions are native managed tools carried automatically; child registration is negotiated as capability evidence while Pi controls their activity, and an unforced missing definition is recorded as omitted. `hidden` tools are excluded. Hosts without exposure metadata use Pi's default `direct` behavior. Source metadata and annotations are retained only as provenance/hints, not as write-safety proof. No user config is needed for this classification.
 
 Open `/subagents` to inspect tasks and `/subagent-cost` to view usage.
 
