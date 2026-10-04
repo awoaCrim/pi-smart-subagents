@@ -1,43 +1,41 @@
-# Pi Smart Subagents
-
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Run isolated child agents in [Pi](https://pi.dev/), with Jev selecting an execution model and local policy activating the complete permitted tool set for each task.
+# Pi Smart Subagents
 
-An independent community fork of Luke Parke's `@parke.dev/pi-subagent` from [LukasParke/pi-extensions](https://github.com/LukasParke/pi-extensions/tree/main/packages/pi-subagent). It retains the upstream engine's named agents, parallel and background tasks, worktrees and usage accounting, and adds Jev routing with child capability verification.
+Run isolated child agents in [Pi](https://pi.dev/), with Jev choosing the execution model and local policy controlling tool access.
 
----
+An independent community fork of Luke Parke's `@parke.dev/pi-subagent` from [LukasParke/pi-extensions](https://github.com/LukasParke/pi-extensions/tree/main/packages/pi-subagent). It retains named agents, parallel and background tasks, worktree isolation and usage accounting, and adds Jev model routing with child capability checks.
 
 <a id="quick-start"></a>
-### Installation
+## Installation
+
+Requires Node.js 22.19.0 or newer and Pi. Do not enable this fork and `@parke.dev/pi-subagent` together: both register the same tools.
 
 ```bash
 pi install npm:@cr1ms0n/pi-subagent
 ```
 
----
+Before your first task, configure your TypeSafe API key and candidate models in `~/.pi/subagent.json`. See the [configuration example](docs/REFERENCE.md#jev-routing); keep credentials private and merge changes into any existing configuration.
 
 <a id="delegation"></a>
-### Usage
+## Usage
 
-Before your first task, configure your TypeSafe API key and candidate models in `~/.pi/subagent.json`. See the [configuration example](docs/REFERENCE.md#jev-routing).
-
-Then ask Pi, for example:
+Ask Pi, for example:
 
 > Use a read-only subagent to review this project's directory structure and summarize the main modules.
 
-Jev chooses the execution model only. Local active-tool, profile and explicit `tools` policy determines the ordinary child candidate set; startup negotiates the child-effective intersection, records unforced omissions without aborting, and fails closed when an explicitly requested tool is absent. Pi-owned native tool activity remains host-controlled. The optional `jevRouting.baseUrl` setting can point to a trusted complete `https://` SystemOne request URL; when omitted, the official `https://api.typesafe.ai/v1/systemone` endpoint remains the exact default. The value is strictly validated, and changing it changes the destination receiving the minimal routing disclosure. See the [configuration reference](docs/REFERENCE.md#jev-routing) for the full contract.
+Jev selects the model, not individual tools. Local policy controls the permitted tool set, and startup checks which capabilities are available in the child. An explicitly requested tool must be available. See the [tool policy and routing reference](docs/REFERENCE.md#jev-routing) for details.
 
-Tool classification uses Pi 0.99.0+'s official `ToolExposure` metadata, not a package-owned infrastructure list. Active `direct` tools (including direct SDK/custom tools) are the ordinary local capability set and are enabled together after profile and explicit-tool policy; Jev does not make per-tool choices or receive tool descriptions. `model-only`, `codemode` and `deferred` definitions are native managed tools carried automatically; child registration is negotiated as capability evidence while Pi controls their activity, and an unforced missing definition is recorded as omitted. `hidden` tools are excluded. Hosts without exposure metadata use Pi's default `direct` behavior. Source metadata and annotations are retained only as provenance/hints, not as write-safety proof. No user config is needed for this classification.
+- Open `/subagents` to inspect and manage tasks.
+- Open `/subagent-cost` to view usage.
+- See the [usage reference](docs/REFERENCE.md#quick-usage) for named agents, parallel tasks, background work, worktrees and structured results, or the [TUI guide](docs/UX.md) for keyboard controls.
 
-Open `/subagents` to inspect tasks and `/subagent-cost` to view usage.
+Model execution and Jev selection may incur separate charges. Planning also invokes Jev; `max_cost` does not cap TypeSafe selector charges. See [cost accounting](docs/COST-ACCOUNTING.md).
 
-See the [usage reference](docs/REFERENCE.md#quick-usage) for parallel tasks, background work, worktrees and structured results, or the [TUI guide](docs/UX.md) for keyboard controls.
-
----
+Routing sends task text and candidate-model information to the selector. Set `jevRouting.baseUrl` only to a trusted endpoint, since it changes the recipient of routing data and the routing credential. See the [security guide](docs/SECURITY.md).
 
 <a id="license"></a>
-### License
+## License
 
 [MIT](LICENSE). Copyright (c) 2026 Luke Parke. Fork maintained by cr1ms0n (awoaCrim). Preserve the original copyright and license when redistributing this work.
 
