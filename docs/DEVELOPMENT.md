@@ -39,7 +39,7 @@ Keep engine rules in their owning modules. The extension is a composition root, 
 
 ### Checks available in this checkout
 
-There are no npm scripts, devDependencies, TypeScript project configuration or bundled test suite. `npm test`, `npm run typecheck` and the upstream release-check scripts are not available here. Installing dependencies alone does not create those commands. The historical [plan](PLAN.md) and [roadmap](ROADMAP.md) refer to upstream tooling and previous release work.
+There are no npm scripts, devDependencies or TypeScript project configuration. The checkout includes a focused offline TUI regression harness under `checks/`, not a repository-wide engine test suite. `npm test`, `npm run typecheck` and the upstream release-check scripts are not available here. Installing dependencies alone does not create those commands. The historical [plan](PLAN.md) and [roadmap](ROADMAP.md) refer to upstream tooling and previous release work.
 
 #### Documentation and whitespace
 
@@ -58,6 +58,28 @@ git diff --cached --check
 ```
 
 These commands do not check Markdown links, translation accuracy or untracked files. Review those separately. Documentation-only changes do not require a provider call or a claim that engine tests passed.
+
+#### Offline TUI regression harness
+
+With Pi and its esbuild/TUI peers already installed:
+
+```bash
+node checks/render-harness.mjs
+# Or point at an installed Pi package explicitly:
+node checks/render-harness.mjs --pi-root /path/to/node_modules/@earendil-works/pi-coding-agent
+```
+
+The resolver uses `--pi-root`, `PI_GLOBAL_DIR`, a locally resolvable peer, then
+`npm root -g`. No dependency is downloaded. Bundles and fixtures go to a unique
+temporary directory, removed afterward. Use `--keep` to inspect them or
+`--fixtures /path/to/output` to retain text fixtures at an explicit destination.
+
+The harness exercises real formatting, components, extension registration and
+management execution, with deterministic config/provider/process/worktree
+boundaries. It uses the installed Pi TUI for ANSI/CJK width and Box-padding
+checks. It does not read user credentials, call Jev/providers, modify user
+settings or write to the checkout unless `--fixtures` explicitly targets it.
+This is not a semantic typecheck or an interactive terminal smoke test.
 
 #### Offline TypeScript syntax check
 

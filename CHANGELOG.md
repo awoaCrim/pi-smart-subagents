@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Cohesive subagent TUI
+
+- Unify foreground results, background widgets, completion cards and the inspector around task identity, explicit child state, readable outcomes and labelled metrics.
+- Freeze captured status/wait snapshots, preserve operation evidence and warnings on expansion, and keep narrow-terminal inspector selections reachable.
+- Use a width-aware background component without reinstalling it on animation ticks; suppress duplicate TUI terminal toasts while retaining RPC and notifications-off alerts.
+- Keep `/btw` answers private and preserve completion batching, once-only usage delivery and execution/routing behavior. Add provider-free rendering and extension-integration checks.
+
 ## 0.11.12 — 2026-10-03
 
 ### Child capability negotiation

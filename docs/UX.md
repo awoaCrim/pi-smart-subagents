@@ -1,172 +1,158 @@
 # pi-subagent UX
 
-## Overview
-The standalone pi-subagent provides rich TUI support for monitoring, inspecting, and interacting with isolated subagent runs (single and parallel modes): inline streaming blocks, a terse footer, an ambient widget for background runs, batched completion notifications, mid-run steering, a worktree apply loop, and the `/subagents` inspector. UI logic is kept independent from `runner`/`registry` via small structural adapters (`SubagentAdapter`).
+The extension uses Pi's native tool blocks, an above-editor background widget,
+completion messages, a terse footer and the `/subagents` inspector. The stateful
+surfaces consume registry projections through adapters; rendering does not own
+execution, routing, delivery or accounting.
 
-## Design principles
+## Shared layout
 
-1. **Pi's tool shell owns state signaling.** The Box wrapper paints
-   `toolPendingBg` / `toolSuccessBg` / `toolErrorBg`, so inline blocks do not
-   repeat state words or draw their own success/error framing.
-2. **Cost is a per-run attribute, not a competing ledger.** Dollar cost appears
-   inside the run's own result block; the parent/children/combined ledger is
-   available on demand via `/subagent-cost`, in `status` tool output, and in the
-   `/subagents` overlay header. The footer never shows cost.
-3. **Fixed-height, mutate-in-place progress.** Streaming blocks keep a stable
-   shape (stats line + one `⎿ activity` line; parallel adds one line per task)
-   and the same component identity is reused across partial renders.
-4. **Trailing-edge streaming flush.** Structural updates (state transition, new
-   session id, billed turn) emit immediately; live-text bursts coalesce with a
-   deferred flush so the last update of a burst always lands.
+Cards read in this order: task identity, explicit child state and duration,
+activity/result/operation, reliability notes, then low-emphasis metrics. Pi's
+shell still owns the tool-call background. A successful management call can
+observe a running or failed child, so the child state is stated separately.
 
-## Surfaces
+A foreground result at a typical terminal width looks like this (the first line
+is Pi's tool-call header):
 
-### Inline tool block (foreground runs)
-- `renderCall` is exactly one line: `subagent <task preview>` (or
-  `N parallel tasks — first task…`, `wait a1b2c3d4`, `… · background`).
-- `renderResult` while streaming (fixed shape, spinner animates via wall-clock
-  frame; Pi's working indicator drives repaints):
-  ```
-  ⠹ ↻3 · 12.4k tok · 8s
-    ⎿ reading src/auth/middleware.ts…
-  ```
-- Terminal single run:
-  ```
-  ↻8 · 33.8k tok · $0.012 · 12s
-    ⎿ Found 5 middleware call sites…
-    → /tmp/report.md
-  ```
-- Parallel: one line per task with a themed state glyph
-  (`◌ queued · ⠹ running · ✓ done · ✗ failed · ◐ partial · − cancelled · ◷ timeout`),
-  per-task stats, and a one-line tail (live activity or first output line).
-- Expanded (Ctrl+O / `app.tools.expand`): full task output capped with a dim
-  `… +N lines` trailer pointing at the artifact/child session.
-- Expanded detail adds a bounded route summary for Jev-routed runs: original model selection, ranked probabilities, the locally activated ordinary candidate tools (with official native exposure names shown separately), selector version, answer-level confidence, outcome and selection latency. Child startup negotiation is retained in result details as bounded effective/omitted/forced tool diagnostics. The actual execution model stays separate from the original choice. Large lists show a preview and total count; old runs without new fields remain readable. Compact results and completion notifications show at most the last five attempt models and label a shortened chain with its total attempt count.
-- Durations freeze at `endedAt`; running durations tick at render time.
-- Terminal diagnostics use one bounded projection everywhere: failures/lost runs use
-  `failed — <error>` / `lost — <reason>`, timeouts use `timeout (routing|queued|starting|running|cancelling)`,
-  cancellation uses `cancelled`, and successful/partial runs use the bounded first meaningful
-  output or stop explanation. Compact surfaces collapse that line safely; expanded detail wraps
-  the same source text. The run id remains discoverable even when routing or setup fails, so
-  status/wait can collect the bounded evidence without starting a duplicate child.
-- Reliability annotations render inline: `[attempt 2]` during retry/failover, the actual attempt model and bounded attempt chain, `[stalled 2m]` while the stall watchdog is flagging silence, and `◐ wrapped up` on budget-stopped runs that concluded gracefully. When Pi maps a resolved thinking level to another effective level, expanded/inline details show `thinking:configured→effective` (for example `off→minimal`). Availability failures can switch models only before tools begin; a stalled indicator is not a promise of another attempt.
-
-### Footer status
-Terse and actionable only: `⚙ 2 running · 1 ready · /subagents`. Cleared when
-nothing is running or ready. No cost — Pi's footer already shows session cost.
-
-### Ambient widget (background runs only)
-An above-editor widget renders while `async: true` runs are live — foreground
-runs already render inline as the tool result, so they never appear here
-(avoids double-render):
-
-```
-● Subagents
-├─ ⠼ Audit deps · ↻4 · 18k tok · 41s
-│   ⎿ checking license headers…
-└─ ◌ License scan · 12s
+```text
+subagent Review ready weapon semantics
+✓ done · [9c933a98] · 7m11s
+  ⎿ Found 2 P2 issues; no P0/P1. Fix before delivery.
+  gpt-6-sol · 24 turns · 192k tokens (in+out) · $0.42
 ```
 
-Cleared when the last background run settles. Spinner and elapsed animate on
-a 250ms interval that exists only while background runs are live.
+`done` describes execution, not a clean review verdict. Task labels prefer the
+request's `description`; unlabelled calls use a bounded task preview. Models are
+abbreviated in compact views and fully identified in expanded details. Turns and
+tokens are labelled: `tokens (in+out)` is accumulated input plus output, not the
+context-window size or cache total. Reported cost is retained; missing cost is
+not interpreted as free usage. Selector currency remains unreported.
 
-### Completion notifications (background runs only)
-When an async run reaches a terminal state, a `steer` message (custom type
-`subagent-completion`) is queued for the parent LLM before its next LLM call,
-so it can react without polling. The human sees a themed compact box (state
-glyph, label, stats, one-line preview, artifact pointers); the LLM sees plain
-text with run ids and a `wait { id }` pointer.
+Every line is ANSI/terminal-width bounded. Narrow views drop secondary metrics
+before state and short ID; expanded details retain full identifiers and usage.
+Compact Markdown previews remove unambiguous headings, bullets, fences and
+emphasis while preserving identifiers, paths and operators. Full output is not
+rewritten. Expanded child output and `/btw` answers use Pi Markdown; raw operation
+evidence, errors and transcripts wrap without interpreting diffs as Markdown.
 
-- Successes within a short window batch into one message (no fanout spam);
-  failures bypass batching and flush immediately, carrying held successes.
-- A `wait` that already delivered the run suppresses the redundant
-  notification (delivered-state is re-checked at flush time).
-- Every task line uses the same bounded outcome diagnostic as inline and overlay rendering; old payloads without the diagnostic field fall back to their preview.
-- Model/attempt annotations use the actual execution history, not the immutable original Jev choice. Fallback creates no extra completion notification or delivery path.
+## Foreground tool blocks
 
-### `/subagents` overlay
-- Header: title + running/ready counters + full usage ledger + rule.
-- List: two lines per run — glyph/id/state/stats, then the task preview.
-  Selection cursor `▶`, animated spinner for live runs.
-- Detail: run stats, summary, then per-task sections (glyph, label,
-  model/selector route/profile/thinking (and configured→effective thinking when Pi reports it), canonical timeout/error diagnostic,
-  usage, pointers, transcript/final output), scrollable with ↑↓/j/k and
-  PageUp/PageDown. The detail viewport is calculated from the current terminal
-  height and the overlay's 80% max-height, reserving space for pagination and
-  the help line rather than using a fixed page size.
-- Actions: `c` cancel, `s` steer (prompts for a message, injects it into the
-  running child), `d` dismiss, `r` resume, `o` output pointers, `a` apply a
-  finished run's changed worktree into the main checkout (confirm dialog),
-  `x` discard worktree + branch (confirm dialog), Enter drill-down,
-  Esc/b back, Esc/q close.
-- Live transcript (`t` on a **running** run's detail): tails the child's
-  session file (`sessionDir/<…sessionId…>.jsonl`) on a 500ms poll while the
-  pane is visible — compact role/tool lines, auto-follow unless you scroll
-  up (which pauses follow). No RPC reads; hidden/finished runs never poll.
-  Missing file shows “waiting for child session…”. `s` steering still works
-  from the same pane so observe → steer stays on one surface.
+- The one-line call header shows the label, parallel task count, resume target or
+  management action. `subagent_wait` has its own header even while arguments are
+  incomplete.
+- Streaming reuses the same component. Body, reliability-note and metrics slots
+  are reserved at a given width so arriving output does not grow the block.
+  Parallel views keep bounded per-task rows and an explicit hidden-task count.
+- State words are `queued`, `running`, `done`, `partial`, `failed`, `cancelled`,
+  `timeout` and `lost`. Failed/lost diagnostics, timeout phase, wrap-up reason,
+  retry/stall/schema notes and effective-thinking differences stay visible.
+- Live inline durations tick only while the host marks the result partial.
+  Terminal durations freeze at `endedAt`. Immutable status/wait snapshots freeze
+  at observation time, including stall age. Old snapshots without a usable clock
+  omit duration instead of inventing an observation time.
+- Expansion uses Pi's `app.tools.expand` binding (normally Ctrl+O). It adds full
+  model identifiers, bounded route/attempt/capability diagnostics, usage,
+  artifact/session/worktree pointers and wrapped output. Output caps show a
+  remainder and point to the existing artifact or child session.
+- Hard execution errors still throw and use Pi's error channel. Legacy or
+  malformed result details fall back to the original textual content. Errors
+  handled before an extension renderer runs remain owned by the host.
 
-### `/subagent-cost`
-Prints the root/subagents/routing/combined ledger once, on demand. Routing
-tokens appear as their own category and their currency as unreported; the known
-dollar totals exclude that unreported selector spend.
+Structural streaming updates still emit immediately. Live-text bursts retain
+trailing-edge coalescing; this presentation layer does not change that policy.
 
-### Mid-run steering
-Children run in Pi RPC mode, so their stdin stays open as a command channel.
-`action: "steer"` (or `s` in the overlay) queues a message that is delivered
-after the child's current assistant turn, before its next LLM call — course
-correction without cancel + retry. Parallel runs steer one task via `index`.
+## Management and launch receipts
 
-### Worktree loop
-Finished runs with changed worktrees support `diff` / `apply` / `discard`
-actions (tool) and `a` / `x` keys (overlay). `apply` lands the worktree's
-combined patch (committed + uncommitted + untracked vs base) onto the main
-checkout as **uncommitted working-tree changes** via `git apply --3way`; it
-never commits and never deletes the worktree. If parent-WIP subtraction is
-not clean, the apply result remains visible together with a bounded warning
-such as `[includes parent WIP]`. `discard` is the explicit cleanup step and
-always confirms first.
+Async launch says **Started in background** and supplies the run ID, without
+claiming completion. Plan says **no child spawned**; selection can still incur
+Jev charges, and dispatch selects again.
 
-### Parallel fan-in
-`synthesis: "<instruction>"` on a parallel run asks for one read-only child
-after all tasks settle that folds their outputs into a single brief, delivered
-first in the result. It is best effort and deferred: its route is selected only
-when aggregation is actually needed after the workers finish, so it never blocks
-worker launch. A selector or child failure keeps the raw worker outputs, their
-usage and a bounded `Optional synthesis blocked: …` diagnostic instead of
-discarding or re-routing them.
+`status` is an explicitly labelled captured observation. `status` without an ID
+lists runs and the ledger; expand to inspect the full text. A completed `wait`
+uses the ordinary result card. Timed-out/aborted waits and already-delivered runs
+use receipts and retain their actual lifecycle: stopping a wait does not cancel
+a child.
 
-### Plan results (tool output, not TUI)
-`action:"plan"` returns the initial model, a bounded probability-ranked candidate preview, common tools, effective total attempt limit and selector usage. Probabilities are selector preferences, not uptime estimates, and `confidence` belongs to the original answer. The common tool list includes the automatically derived official native definitions once, while routing detail retains the ordinary local candidate set; resolution notes identify the native exposure separately. A later child startup negotiates the effective intersection, records unforced omissions in `toolDiagnostics`, and fails closed only for an explicitly requested missing tool or another hard capability/provenance mismatch. There is no new activation indicator or UI state. A plan reports no actual attempts; a later invocation selects again. It starts no child and creates no run entry, so plan never adds an overlay row or ambient widget. A plan whose optional synthesis selection fails still returns the valid worker plan and labels only that stage blocked with its diagnostic.
+`steer` confirms a message was queued for delivery after the current turn, not
+that the child has read it. `cancel` confirms a request, not completed shutdown.
+`diff`, `apply` and `discard` show operation evidence instead of an old child
+answer, including for parallel runs. Expanded evidence comes from the existing
+capped tool content. An additional visual cap has an explicit remainder and
+full-evidence pointer; underlying output/artifact limits remain unchanged.
 
-### Failed-attempt output
+Apply lands changes as uncommitted working-tree changes and preserves the
+worktree/archive. Warnings remain visible. Discard is explicit cleanup. Inspector
+apply/discard actions ask for confirmation; tool actions follow their existing
+explicit-request semantics.
 
-Earlier attempts retain bounded, attributed output previews and child-session pointers. If all attempts fail, the final state, failure reason, model and session stay authoritative; earlier text does not become that model's answer or a successful structured result. A human-readable earlier preview names its source attempt. Successful final JSON is never concatenated with failed JSON. Full output remains in existing child sessions, which are retained while referenced on the active branch. Compact views remain within their existing output limits.
+## Background widget and completions
 
-## States
-- **Queued/Running**: spinner + live stats + activity tail from live text.
-- **Completed/Partial/Failed/Cancelled/Timeout/Lost**: state glyph, frozen
-  duration, usage summary, output pointers, and the shared bounded outcome
-  diagnostic; failures show the error message. Timeout details identify
-  `routing` separately from child `queued`, `starting`, `running` or
-  `cancelling` phases.
-- **Delivered vs Undelivered**: footer/overlay track pending delivery.
-- **Notification**: one per terminal transition to avoid spam. The footer
-  notification keeps `Subagent <short-id>` plus the concise canonical
-  diagnostic; deduplication uses the run/transition identity, not the display
-  text.
+Only live `async:true` runs appear above the editor; foreground runs stay inline.
+The widget uses the same identity/state/body/metrics order, short run IDs and
+explicit hidden run/task counts. It shows at most four runs and two task rows per
+parallel run. Unfilled live slots are intentionally reserved.
 
-## Integration Notes
-- Extension wires via `ctx.ui.custom((tui, theme, kb, done) => createSubagentsOverlay(tui, theme, adapter, done), {overlay: true})`.
-- Adapter provides getActiveRuns/getCompletedRuns/cancelRun etc. without tight coupling.
-- Inline renderers reuse `context.lastComponent` (a `LineBlock`) so the row keeps
-  a stable component identity across partial renders.
-- Streamed tool updates separate LLM-facing `content` (compact status string)
-  from render-facing `details` (state, usage, live-text tail, run timing).
-- Tests combine pure UI models with a headless Pi extension harness: format
-  helpers, block layouts (collapsed/streaming/terminal/parallel), navigation,
-  truncation (ANSI-safe via `visibleWidth`), ready state, lifecycle/disposal.
-- Follows Pi TUI guidelines (render(width), handleInput, invalidate,
-  requestRender, dispose). The overlay owns a single animation interval.
+The TUI installs one width-aware component. Its single 250ms timer requests
+repaints without reinstalling the widget. When no background run remains, or on
+teardown, the widget and timer are cleared. RPC uses bounded string rows because
+RPC does not render component factories.
 
-See ARCHITECTURE.md for ownership boundaries. All rendering respects terminal width and ANSI safety.
+On completion, the parent receives the existing `subagent-completion` message
+with `{ deliverAs: "steer", triggerTurn: true }`. Successes batch; failures flush
+immediately. The human card shows the shared layout, known cost and per-task
+outcomes. Expand for full model identifiers, bounded attempt history and
+pointers; `/subagents` opens the inspector. The human card omits the developer
+JSON collection hint; the model-facing message retains it.
+
+A wait that consumes the run before the batch flush suppresses the redundant
+message. A completion notification does not consume full-result delivery or
+native usage; wait keeps its existing once-only delivery gate. Rendering never
+marks a run delivered.
+
+TUI terminal toasts are quiet when the inline result or completion card owns the
+visible outcome. Background runs with notifications disabled retain a terminal
+alert, including failures. RPC retains terminal alerts because it cannot draw
+these custom cards. Action errors and worktree warnings are not suppressed.
+
+## Footer and inspector
+
+The footer shows only actionable counts:
+`⚙ 2 running · 1 ready · /subagents`. It clears when nothing is running or ready.
+The ledger is available in `/subagent-cost`, `status` content and the inspector
+header, without competing with Pi's native cost footer.
+
+`/subagents` shows task-first identity, state/time, then metrics. List capacity is
+computed from actual entry heights within the overlay's 80% terminal-height
+budget. Overflow counts and keyboard navigation keep the selected run reachable;
+very short terminals use a one-line entry. Details page through full identifiers,
+route/attempt/capability metadata, usage/cache breakdown, diagnostics, pointers
+and transcript/output.
+
+Existing keys remain:
+
+- ↑↓ or j/k: select or scroll; PageUp/PageDown: detail scrolling.
+- Enter: details; Esc/b: back; Esc/q: close the list.
+- c: cancel; s: prompt for a steering message; d: dismiss; r: prepare resume;
+  o: output pointers; a/x: confirmed apply/discard of a finished worktree.
+- t in active-run details: toggle the live transcript. It polls the child session
+  file every 500ms only while visible, follows the tail until scrolling upward,
+  and stops on completion, exit or disposal. Missing files show a waiting state.
+
+## Private `/btw` entries
+
+`/btw` uses the same title/state/body order without inventing model, run or usage
+fields absent from its payload. Running and answer entries remain separate
+`appendEntry` events, hidden from the parent model. Expanded answers wrap in full.
+The private TUI entry owns its outcome, avoiding duplicate TUI toasts; non-TUI
+notifications retain their existing behavior.
+
+## Verification
+
+`checks/render-harness.mjs` exercises shared formatting and actual extension
+registration/execution against deterministic boundary fakes. It checks narrow
+CJK/ANSI output, host Box padding, frozen snapshots, stable component/timer
+lifecycle, inspector viewports, management evidence, notification/wait ordering,
+usage delivery and `/btw` privacy. It does not call Jev or a provider and does not
+replace a live interactive terminal check or semantic TypeScript checking.
+See [development](DEVELOPMENT.md) for the command and dependency requirements.

@@ -11,17 +11,23 @@ import {
   formatDuration,
   formatRankedPreview,
   formatRunDiagnostic,
+  formatState,
   formatStatusPreview,
-  formatTokens,
   isActiveState,
   oneLine,
   projectRoutingForDisplay,
   projectAttemptsForDisplay,
+  renderBtwLines,
   renderCallLine,
+  renderFallbackLines,
   renderRunLines,
+  renderWaitCallLine,
+  renderCompletionLines,
+  widgetRunLines,
   SPINNERS,
-  stateGlyph,
   type InlineRunView,
+  type RunPresentation,
+  type WidgetRunView,
 } from "./format.js";
 import { createGetPiCommand, getLaunchResolution } from "./launch.js";
 import { abortAsPromise } from "./maintenance.js";
@@ -51,6 +57,7 @@ import { describeCatalog, discoverAgents, type AgentDefinition } from "./agents.
 import {
   createSubagentsOverlay,
   FooterStatusModel,
+  SubagentWidget,
   SUBAGENTS_OVERLAY_MAX_HEIGHT_PERCENT,
   type SubagentAdapter,
 } from "./ui.js";
@@ -80,6 +87,8 @@ interface SessionRuntime {
   asyncRuns: Set<string>;
   completions?: CompletionBatcher;
   widgetTimer?: NodeJS.Timeout;
+  /** TUI-mode width-aware widget instance (RPC forwards string[] instead). */
+  widgetComponent?: SubagentWidget;
   /** Named agent catalog (project/shared/global .md files). Refreshed lazily. */
   agents: Map<string, AgentDefinition>;
   agentsLoadedAt: number;
@@ -242,56 +251,77 @@ function refreshFooter(runtime: SessionRuntime): void {
 /**
  * Ambient widget above the editor for BACKGROUND runs only — foreground runs
  * already render inline as the tool result, so showing them here would
- * double-render. Cleared when no background runs are live.
+ * double-render. Cleared when no background run is live.
+ *
+ * RPC mode forwards only `string[]` and ignores component factories
+ * (docs/rpc-extension-ui.md), and legacy/test contexts may omit `ctx.mode`
+ * entirely, so the TUI component is installed only for a real terminal mode.
  */
 function refreshWidget(runtime: SessionRuntime): void {
   if (runtime.closed || !runtime.ctx.hasUI) return;
-  if (runtime.config.widget === "off") {
+  const theme = runtime.ctx.ui.theme;
+  const clearWidget = () => {
     runtime.ctx.ui.setWidget("subagent", undefined);
     if (runtime.widgetTimer) {
       clearInterval(runtime.widgetTimer);
       runtime.widgetTimer = undefined;
     }
+    if (runtime.widgetComponent) {
+      runtime.widgetComponent.dispose();
+      runtime.widgetComponent = undefined;
+    }
+  };
+  if (runtime.config.widget === "off") {
+    clearWidget();
     return;
   }
-  const theme = runtime.ctx.ui.theme;
   const live = runtime.registry.getLiveRuns(runtime.key).filter((run) => runtime.asyncRuns.has(run.id));
   if (!live.length) {
-    runtime.ctx.ui.setWidget("subagent", undefined);
-    if (runtime.widgetTimer) {
-      clearInterval(runtime.widgetTimer);
-      runtime.widgetTimer = undefined;
-    }
+    clearWidget();
     return;
   }
-  // Animate spinner/elapsed even when the child is between events.
-  if (!runtime.widgetTimer) {
-    runtime.widgetTimer = setInterval(() => refreshWidget(runtime), 250);
-    runtime.widgetTimer.unref?.();
-  }
-  const now = Date.now();
-  const frame = Math.floor(now / 120) % SPINNERS.length;
-  const lines: string[] = [theme.fg("accent", "●") + " " + theme.bold("Subagents")];
-  const shown = live.slice(0, 4);
-  shown.forEach((run, index) => {
-    const last = index === shown.length - 1 && live.length <= 4;
-    const joint = last ? "└─" : "├─";
-    for (const result of run.results.slice(0, 2)) {
-      const active = isActiveState(result.state);
-      const glyph = active ? theme.fg("accent", SPINNERS[frame]!) : stateGlyph(result.state, theme);
-      const stats = [
-        result.usage.turns ? `↻${result.usage.turns}` : "",
-        result.usage.input + result.usage.output ? `${formatTokens(result.usage.input + result.usage.output)} tok` : "",
-        formatDuration(now - run.startedAt),
-      ].filter(Boolean).join(" · ");
-      const activity = result.liveText?.split("\n").reverse().find((line) => line.trim());
-      const modelText = result.model ?? "model unknown";
-      lines.push(`${theme.fg("dim", joint)} ${glyph} ${theme.fg("dim", modelText)} · ${theme.fg("text", result.label)} ${theme.fg("dim", stats)}`);
-      if (activity) lines.push(`${theme.fg("dim", last ? "    " : "│   ")}${theme.fg("dim", "⎿ ")}${theme.fg("muted", oneLine(activity, 80))}`);
+  const tuiMode = (runtime.ctx as { mode?: string }).mode === "tui";
+  if (tuiMode) {
+    if (!runtime.widgetComponent) {
+      runtime.widgetComponent = new SubagentWidget({
+        // Foreground runs stay inline: only background runs belong here.
+        getRuns: () => runtime.registry.getLiveRuns(runtime.key).filter((run) => runtime.asyncRuns.has(run.id)).map(snapshotFromLiveRun),
+        getTheme: () => runtime.ctx.ui.theme,
+        subscribe: (listener) => runtime.registry.subscribe((event) => {
+          if (event.sessionKey === runtime.key) listener();
+        }),
+      }, theme);
+      runtime.ctx.ui.setWidget("subagent", (tui, widgetTheme) => runtime.widgetComponent!.attach(tui, widgetTheme));
+    } else {
+      runtime.widgetComponent.invalidate();
     }
-  });
-  if (live.length > 4) lines.push(theme.fg("dim", `└─ +${live.length - 4} more · /subagents`));
-  runtime.ctx.ui.setWidget("subagent", lines);
+  } else {
+    if (!runtime.widgetTimer) {
+      runtime.widgetTimer = setInterval(() => refreshWidget(runtime), 250);
+      runtime.widgetTimer.unref?.();
+    }
+    runtime.ctx.ui.setWidget("subagent", widgetStringLines(runtime, theme));
+  }
+}
+
+/** RPC/legacy fallback: the same rows as a plain string array. */
+function widgetStringLines(runtime: SessionRuntime, theme: Theme): string[] {
+  return widgetRunLines(widgetViews(runtime), { theme, width: 100, now: Date.now() });
+}
+
+function widgetViews(runtime: SessionRuntime): WidgetRunView[] {
+  return runtime.registry.getLiveRuns(runtime.key)
+    .filter((run) => runtime.asyncRuns.has(run.id))
+    .map((run) => {
+      const snapshot = snapshotFromLiveRun(run);
+      return {
+        id: snapshot.id,
+        state: snapshot.state,
+        startedAt: snapshot.startedAt,
+        mode: snapshot.mode,
+        results: snapshot.results,
+      };
+    });
 }
 
 function utf8Preview(value: unknown, maxBytes: number): string {
@@ -306,6 +336,9 @@ interface RunMeta {
   state?: RunSnapshot["state"];
   startedAt?: number;
   endedAt?: number;
+  id?: string;
+  /** Present only for management receipts; never persisted, model-facing or engine state. */
+  presentation?: RunPresentation;
 }
 
 function compactDetails(
@@ -321,6 +354,8 @@ function compactDetails(
     state: run?.state,
     startedAt: run?.startedAt,
     endedAt: run?.endedAt,
+    id: run?.id,
+    presentation: run?.presentation,
     results: results.map((result: any) => ({
       label: result.label,
       task: String(result.task ?? "").slice(0, 500),
@@ -643,6 +678,7 @@ function buildCompletionDetails(runtime: SessionRuntime, runIds: string[]): Comp
         model: result.model,
         attempts: result.attempts,
         attemptedModels: projectAttemptsForDisplay({ attemptedModels: result.attemptedModels }).attemptedModels,
+        attemptedModelsTotal: result.attemptedModels?.length,
         pointers: taskPointers,
       };
     });
@@ -662,6 +698,7 @@ function buildCompletionDetails(runtime: SessionRuntime, runIds: string[]): Comp
       model: tasks.length === 1 ? first?.model : undefined,
       attempts: tasks.length === 1 ? first?.attempts : undefined,
       attemptedModels: tasks.length === 1 ? first?.attemptedModels : undefined,
+      attemptedModelsTotal: tasks.length === 1 ? first?.attemptedModelsTotal : undefined,
       pointers,
       tasks,
     });
@@ -874,6 +911,9 @@ export default function registerSubagent(pi: ExtensionAPI): void {
     runtime.footer?.dispose();
     runtime.locks.dispose();
     if (runtime.widgetTimer) clearInterval(runtime.widgetTimer);
+    runtime.widgetTimer = undefined;
+    runtime.widgetComponent?.dispose();
+    runtime.widgetComponent = undefined;
     runtime.ctx.ui.setStatus("subagent", undefined);
     runtime.ctx.ui.setWidget("subagent", undefined);
   }
@@ -974,30 +1014,47 @@ export default function registerSubagent(pi: ExtensionAPI): void {
 
     runtime.unsubscribe = runtime.registry.subscribe((event) => {
       if (event.sessionKey !== runtime.key) return;
-      if (event.type === "terminal" && runtime.asyncRuns.has(event.runId)) {
+      // Captured before the async set is drained: it decides both completion
+      // delivery and which human surface owns the visible result.
+      const wasAsync = runtime.asyncRuns.has(event.runId);
+      if (event.type === "terminal" && wasAsync) {
         runtime.asyncRuns.delete(event.runId);
-        // Delivered-state is checked again at flush time (wait may consume the
-        // run during the batching window).
+        // Delivered-state is checked again at flush time (a wait may consume
+        // the run during the batching window).
         runtime.completions?.add(event.runId, !["completed", "partial"].includes(event.state));
       }
+      // Toast ownership, not delivery: in a real terminal a background run with
+      // notifications on renders the completion card, and a foreground run
+      // renders inline as the tool result. A standalone alert is the fallback
+      // surface when neither covers the event (notably notifications: "off"),
+      // so a failure is never silently lost.
+      //
+      // Custom message/entry renderers are TUI-only (docs/rpc-extension-ui.md):
+      // in RPC and other headless modes no such card is ever drawn, so the
+      // pre-existing alert behavior is kept there rather than suppressed on the
+      // strength of a card that will not render.
+      const tuiMode = (ctx as { mode?: string }).mode === "tui";
       if (ctx.hasUI && event.type === "terminal") {
-        const found = runtime.registry.lookup(event.runId, runtime.key);
-        const snapshot = found.status === "found" && found.run && !("controller" in found.run)
-          ? found.run
-          : undefined;
-        const diagnostic = snapshot
-          ? formatRunDiagnostic({
-            mode: snapshot.mode,
-            state: snapshot.state,
-            summary: snapshot.summary,
-            results: snapshot.results,
-          })
-          : undefined;
-        runtime.footer?.notifyTerminal(
-          `terminal:${event.runId}:${event.state}`,
-          `Subagent ${event.runId.slice(0, 8)} ${diagnostic ?? event.state}`,
-          event.state === "completed" ? "info" : "warn",
-        );
+        const ownSurface = tuiMode && (wasAsync ? runtime.config.notifications !== "off" : true);
+        if (!ownSurface) {
+          const found = runtime.registry.lookup(event.runId, runtime.key);
+          const snapshot = found.status === "found" && found.run && !("controller" in found.run)
+            ? found.run
+            : undefined;
+          const diagnostic = snapshot
+            ? formatRunDiagnostic({
+              mode: snapshot.mode,
+              state: snapshot.state,
+              summary: snapshot.summary,
+              results: snapshot.results,
+            })
+            : undefined;
+          runtime.footer?.notifyTerminal(
+            `terminal:${event.runId}:${event.state}`,
+            `Subagent ${event.runId.slice(0, 8)} ${diagnostic ?? event.state}`,
+            event.state === "completed" ? "info" : "warn",
+          );
+        }
       }
       refreshFooter(runtime);
     });
@@ -1058,47 +1115,54 @@ export default function registerSubagent(pi: ExtensionAPI): void {
   // plain content, the human sees this.
   pi.registerMessageRenderer(COMPLETION_MESSAGE_TYPE, (message, { expanded }, theme) => {
     const details = message.details as CompletionDetails | undefined;
-    if (!details?.runs.length) return undefined;
+    if (!Array.isArray(details?.runs) || !details.runs.length) return undefined;
     return lineComponentForMessage((width) => {
-      const lines: string[] = [];
-      for (const run of details.runs) {
-        const tasks = run.tasks?.length ? run.tasks : [{
-          label: run.label,
-          state: run.state,
-          timeoutPhase: undefined,
-          diagnostic: undefined,
-          preview: run.preview,
-          turns: run.turns,
-          tokens: run.tokens,
-          cost: run.cost,
-          model: run.model,
-          attempts: run.attempts,
-          attemptedModels: run.attemptedModels,
-          pointers: run.pointers,
-        }];
-        tasks.forEach((task) => {
-          const glyph = stateGlyph(task.state as any, theme);
-          const stats = [
-            task.turns ? `↻${task.turns}` : "",
-            task.tokens ? `${formatTokens(task.tokens)} tok` : "",
-            task.cost > 0.00005 ? `$${task.cost.toFixed(3)}` : "",
-            tasks.length === 1 ? formatDuration(run.durationMs) : "",
-            task.model ?? "",
-          ].filter(Boolean).join(" · ");
-          const label = tasks.length > 1 ? `${run.label}/${task.label}` : task.label;
-          lines.push(truncateToWidth(`${glyph} ${theme.fg("dim", task.model ?? "model unknown")} · ${theme.bold(theme.fg("toolTitle", label))} ${theme.fg("dim", `[${run.id.slice(0, 8)}] ${stats}`)}`, width));
-          const diagnostic = task.diagnostic ?? task.preview;
-          if (diagnostic) lines.push(truncateToWidth(`  ${theme.fg("dim", "⎿")} ${theme.fg("toolOutput", diagnostic)}`, width));
-          if (task.attemptedModels && task.attemptedModels.length > 1) {
-            lines.push(truncateToWidth(`  ${theme.fg("warning", `models: ${task.attemptedModels.join(" → ")}${task.attempts && task.attempts > task.attemptedModels.length ? ` (last ${task.attemptedModels.length} of ${task.attempts})` : ""}`)}`, width));
-          }
-          if ((expanded || tasks.length === 1) && task.pointers.length) {
-            lines.push(truncateToWidth(theme.fg("dim", `  ${task.pointers.join(" · ")}`), width));
-          }
-        });
+      try {
+        const lines = renderCompletionLines(
+          details.runs.map((run) => ({
+            id: run.id,
+            state: run.state,
+            durationMs: run.durationMs,
+            mode: run.tasks?.length > 1 ? "parallel" as const : undefined,
+            label: run.tasks?.length > 1 ? `${run.tasks.length} parallel tasks` : run.label,
+            pointers: run.pointers,
+            tasks: (run.tasks?.length ? run.tasks : [{
+              label: run.label,
+              state: run.state,
+              turns: run.turns,
+              tokens: run.tokens,
+              cost: run.cost,
+              model: run.model,
+              attempts: run.attempts,
+              attemptedModels: run.attemptedModels,
+              attemptedModelsTotal: run.attemptedModelsTotal,
+              pointers: run.pointers,
+              diagnostic: run.preview,
+              preview: run.preview,
+            }]).map((task) => ({
+              label: task.label,
+              state: task.state,
+              model: task.model,
+              turns: task.turns,
+              tokens: task.tokens,
+              cost: task.cost,
+              diagnostic: task.diagnostic,
+              preview: task.preview,
+              pointers: task.pointers,
+              attemptedModels: task.attemptedModels,
+              attemptedModelsTotal: task.attemptedModelsTotal,
+              attempts: task.attempts,
+            })),
+          })),
+          { theme, width, expanded },
+        );
+        // Discoverable action, not a developer-facing JSON hint.
+        if (!expanded) lines.push(truncateToWidth(theme.fg("dim", `  /subagents for details · ${expandHint()}`), width));
+        return lines;
+      } catch {
+        const text = typeof message.content === "string" ? message.content : "Completion details unavailable; open /subagents.";
+        return renderFallbackLines(text, { theme, width, expanded, presentation: { kind: "receipt", operation: "Background completion" } });
       }
-      lines.push(theme.fg("dim", truncateToWidth(`wait { id } collects full output`, width)));
-      return lines;
     });
   });
 
@@ -1296,23 +1360,58 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             agentSection,
             formatLedger(ledger(runtime)),
           ].filter(Boolean).join("\n\n");
-          return { content: [{ type: "text", text }], details: details("single", []) };
+          return {
+            content: [{ type: "text", text }],
+            details: {
+              ...details("single", []),
+              presentation: { kind: "receipt", operation: "status (all)", observedAt: Date.now(), durationKind: "unknown" } satisfies RunPresentation,
+            },
+          };
         }
         const found = runtime.registry.lookup(validated.id!, runtime.key);
         if (found.status === "ambiguous") fail(`Ambiguous id. Matches: ${found.matches!.join(", ")}`);
         if (found.status !== "found" || !found.run) fail(`Run ${validated.id} was not found in this session.`);
-        const snapshot = "controller" in found.run ? snapshotFromLiveRun(found.run) : found.run;
+        let snapshot = "controller" in found.run ? snapshotFromLiveRun(found.run) : found.run;
         if (validated.mode === "status") {
           const text = [
             formatStatusPreview(snapshot),
             ...resumableSessionLines(snapshot, true),
             formatLedger(ledger(runtime)),
           ].filter(Boolean).join("\n");
-          return { content: [{ type: "text", text }], details: details(snapshot.mode, snapshot.results, snapshot) };
+          return {
+            content: [{ type: "text", text }],
+            details: details(snapshot.mode, snapshot.results, {
+              ...snapshot,
+              // The observed child lifecycle, not the tool call, decides the state word.
+              presentation: {
+                kind: "snapshot",
+                operation: "status",
+                id: snapshot.id,
+                observedAt: Date.now(),
+                durationKind: isActiveState(snapshot.state) ? "live" : snapshot.endedAt !== undefined ? "frozen" : "unknown",
+              } satisfies RunPresentation,
+            }),
+          };
         }
         if (validated.mode === "cancel") {
           if ("controller" in found.run) found.run.controller.abort();
-          return { content: [{ type: "text", text: `Cancellation requested for ${snapshot.id}` }], details: details(snapshot.mode, snapshot.results, snapshot) };
+          return {
+            content: [{ type: "text", text: `Cancellation requested for ${snapshot.id}` }],
+            details: details(snapshot.mode, snapshot.results, {
+              ...snapshot,
+              // Requested, not completed: the receipt must not imply the child stopped.
+              presentation: {
+                kind: "receipt",
+                operation: "cancel requested",
+                id: snapshot.id,
+                receipt: isActiveState(snapshot.state)
+                  ? `Cancellation requested for [${snapshot.id.slice(0, 8)}]; the child may still be shutting down.`
+                  : `Run [${snapshot.id.slice(0, 8)}] was already ${formatState(snapshot.state)}.`,
+                observedAt: Date.now(),
+                durationKind: "unknown",
+              } satisfies RunPresentation,
+            }),
+          };
         }
         if (validated.mode === "steer") {
           if (!("controller" in found.run)) fail(`Run ${snapshot.id} is not running; steer only applies to live runs. Use resume to continue a finished child.`);
@@ -1329,7 +1428,18 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           if (!runner.steer(validated.message!)) fail(`Task ${index} in run ${snapshot.id} is no longer accepting input.`);
           return {
             content: [{ type: "text", text: `Steering message queued for run ${snapshot.id} task ${index}. It is delivered after the current assistant turn; watch status/wait for the response.` }],
-            details: details(snapshot.mode, snapshot.results, snapshot),
+            details: details(snapshot.mode, snapshot.results, {
+              ...snapshot,
+              // Steer confirms queuing only; it never claims the child read it.
+              presentation: {
+                kind: "receipt",
+                operation: "steer queued",
+                id: snapshot.id,
+                receipt: `Message queued for task ${index}; delivered after its current assistant turn.`,
+                observedAt: Date.now(),
+                durationKind: "unknown",
+              } satisfies RunPresentation,
+            }),
           };
         }
         if (["diff", "apply", "discard"].includes(validated.mode)) {
@@ -1357,16 +1467,53 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           if (validated.mode === "diff" && archiveExists) {
             const patch = await fs.readFile(archivedPatch, "utf8");
             const capped = runtime.output.capOutputForDelivery([{ ...chosen.result, finalOutput: `Worktree was reclaimed; archived patch for run ${snapshot.id} task ${chosen.index} (branch ${tree.branch}):\n\n${patch}`, outputMode: "inline" }] as any);
-            return { content: [{ type: "text", text: capped.text }], details: details(snapshot.mode, snapshot.results, snapshot) };
+            return {
+              content: [{ type: "text", text: capped.text }],
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                // Diff evidence, not the child's old final answer.
+                presentation: {
+                  kind: "receipt",
+                  operation: "diff (archived patch)",
+                  id: snapshot.id,
+                  receipt: `Archived patch for task ${chosen.index} (branch ${tree.branch}).`,
+                  notes: ["Worktree directory was reclaimed; the archived patch is authoritative."],
+                  // Expanded evidence comes from the existing capped tool content.
+                  observedAt: Date.now(),
+                  durationKind: "unknown",
+                } satisfies RunPresentation,
+              }),
+            };
           }
           if (validated.mode === "apply" && archiveExists) {
             const applied = await runtime.worktrees.applyArchivedPatch(archivedPatch, ctx.cwd);
-            return { content: [{ type: "text", text: `Applied archived patch from run ${snapshot.id} task ${chosen.index} into ${ctx.cwd} as uncommitted working-tree changes:\n${applied.stat}\nReview and commit them. The archive ${archivedPatch} is preserved; use action:'discard' to clean up.` }], details: details(snapshot.mode, snapshot.results, snapshot) };
+            return {
+              content: [{ type: "text", text: `Applied archived patch from run ${snapshot.id} task ${chosen.index} into ${ctx.cwd} as uncommitted working-tree changes:\n${applied.stat}\nReview and commit them. The archive ${archivedPatch} is preserved; use action:'discard' to clean up.` }],
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                presentation: {
+                  kind: "receipt",
+                  operation: "apply (archived patch)",
+                  id: snapshot.id,
+                  receipt: "Applied into the working tree as uncommitted changes; the archive is preserved.",
+                  notes: applied.warning ? [`Warning: ${oneLine(applied.warning, 400)}`] : undefined,
+                  detailLines: applied.stat ? applied.stat.split("\n").filter((line) => line.trim()) : undefined,
+                  observedAt: Date.now(),
+                  durationKind: "unknown",
+                } satisfies RunPresentation,
+              }),
+            };
           }
           if (validated.mode === "discard" && archiveExists) {
             await fs.rm(archivedPatch, { force: true });
             await runtime.worktrees.forceRemove({ cwd: tree.cwd, branch: tree.branch, baseCwd: ctx.cwd, baseCommit: tree.baseCommit, changed: tree.changed });
-            return { content: [{ type: "text", text: `Discarded archived patch and branch ${tree.branch} from run ${snapshot.id} task ${chosen.index}.` }], details: details(snapshot.mode, snapshot.results, snapshot) };
+            return {
+              content: [{ type: "text", text: `Discarded archived patch and branch ${tree.branch} from run ${snapshot.id} task ${chosen.index}.` }],
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                presentation: { kind: "receipt", operation: "discard", id: snapshot.id, receipt: `Removed the archived patch and branch ${tree.branch}.`, observedAt: Date.now(), durationKind: "unknown" } satisfies RunPresentation,
+              }),
+            };
           }
           if (validated.mode === "diff") {
             const diff = await runtime.worktrees.diff({ cwd: tree.cwd, baseCommit: tree.baseCommit });
@@ -1378,7 +1525,22 @@ export default function registerSubagent(pi: ExtensionAPI): void {
               diff.truncated ? `\n[patch truncated; full diff: git -C ${tree.cwd} diff ${tree.baseCommit}]` : "",
             ].filter(Boolean).join("\n");
             const capped = runtime.output.capOutputForDelivery([{ ...chosen.result, finalOutput: text, outputMode: "inline" }] as any);
-            return { content: [{ type: "text", text: capped.text }], details: details(snapshot.mode, snapshot.results, snapshot) };
+            return {
+              content: [{ type: "text", text: capped.text }],
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                presentation: {
+                  kind: "receipt",
+                  operation: "diff",
+                  id: snapshot.id,
+                  receipt: `Worktree diff for task ${chosen.index} (branch ${tree.branch}).`,
+                  notes: diff.truncated ? ["Patch truncated; run git diff in the worktree for the full change."] : undefined,
+                  // Reuse capped tool content rather than duplicating a patch in details.
+                  observedAt: Date.now(),
+                  durationKind: "unknown",
+                } satisfies RunPresentation,
+              }),
+            };
           }
           if (validated.mode === "apply") {
             const applied = await runtime.worktrees.apply({ cwd: tree.cwd, baseCommit: tree.baseCommit }, ctx.cwd);
@@ -1386,11 +1548,34 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             const text = applied.applied
               ? `Applied worktree changes from run ${snapshot.id} task ${chosen.index} into ${ctx.cwd} as uncommitted working-tree changes:\n${applied.stat}${warning}\nReview and commit them. The worktree and branch ${tree.branch} are preserved; use action:'discard' to clean up.`
               : `Worktree for run ${snapshot.id} task ${chosen.index} had no changes to apply.${warning}`;
-            return { content: [{ type: "text", text }], details: details(snapshot.mode, snapshot.results, snapshot) };
+            return {
+              content: [{ type: "text", text }],
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                presentation: {
+                  kind: "receipt",
+                  operation: applied.applied ? "apply" : "apply (no changes)",
+                  id: snapshot.id,
+                  receipt: applied.applied
+                    ? "Applied into the working tree as uncommitted changes; the worktree and branch are preserved."
+                    : "The worktree had no changes to apply.",
+                  notes: applied.warning ? [`Warning: ${oneLine(applied.warning, 400)}`] : undefined,
+                  detailLines: applied.stat ? applied.stat.split("\n").filter((line) => line.trim()) : undefined,
+                  observedAt: Date.now(),
+                  durationKind: "unknown",
+                } satisfies RunPresentation,
+              }),
+            };
           }
           // discard
           await runtime.worktrees.forceRemove({ cwd: tree.cwd, branch: tree.branch, baseCwd: ctx.cwd, baseCommit: tree.baseCommit, changed: tree.changed });
-          return { content: [{ type: "text", text: `Discarded worktree and branch ${tree.branch} from run ${snapshot.id} task ${chosen.index}.` }], details: details(snapshot.mode, snapshot.results, snapshot) };
+          return {
+            content: [{ type: "text", text: `Discarded worktree and branch ${tree.branch} from run ${snapshot.id} task ${chosen.index}.` }],
+            details: details(snapshot.mode, snapshot.results, {
+              ...snapshot,
+              presentation: { kind: "receipt", operation: "discard", id: snapshot.id, receipt: `Removed worktree and branch ${tree.branch}.`, observedAt: Date.now(), durationKind: "unknown" } satisfies RunPresentation,
+            }),
+          };
         }
         if ("promise" in found.run) {
           // Wait must stay interruptible: aborting the wait returns promptly
@@ -1412,10 +1597,30 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           } finally {
             if (timer) clearTimeout(timer);
           }
+          if (raced !== "done") {
+            // Observe the child when waiting stops, not when waiting began.
+            // This is a display read only: timeout/abort still neither cancels
+            // nor claims delivery, and model-facing receipt text is unchanged.
+            const latest = runtime.registry.lookup(snapshot.id, runtime.key);
+            if (latest.status === "found" && latest.run) {
+              snapshot = "controller" in latest.run ? snapshotFromLiveRun(latest.run) : latest.run;
+            }
+          }
           if (raced === "aborted") {
             return {
               content: [{ type: "text", text: `Wait aborted. Run ${snapshot.id} continues in the background; use status/wait/cancel later or open /subagents.` }],
-              details: details(snapshot.mode, snapshot.results, snapshot),
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                // The wait stopped; the child did not.
+                presentation: {
+                  kind: "receipt",
+                  operation: "wait (aborted)",
+                  id: snapshot.id,
+                  receipt: "Wait aborted; the run continues in the background.",
+                  observedAt: Date.now(),
+                  durationKind: isActiveState(snapshot.state) ? "live" : snapshot.endedAt !== undefined ? "frozen" : "unknown",
+                } satisfies RunPresentation,
+              }),
             };
           }
           if (raced === "timeout") {
@@ -1423,7 +1628,17 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             // stays collectable, so we deliberately skip markDelivered here.
             return {
               content: [{ type: "text", text: `Wait timed out after ${waitTimeoutMs}ms. Run ${snapshot.id} is still running and was NOT cancelled; collect it with subagent_wait again (or action:'status'), or stop it with action:'cancel'.` }],
-              details: details(snapshot.mode, snapshot.results, snapshot),
+              details: details(snapshot.mode, snapshot.results, {
+                ...snapshot,
+                presentation: {
+                  kind: "receipt",
+                  operation: "wait (timed out)",
+                  id: snapshot.id,
+                  receipt: `Wait timed out after ${formatDuration(waitTimeoutMs ?? 0)}; the run is still collectable and was not cancelled.`,
+                  observedAt: Date.now(),
+                  durationKind: isActiveState(snapshot.state) ? "live" : snapshot.endedAt !== undefined ? "frozen" : "unknown",
+                } satisfies RunPresentation,
+              }),
             };
           }
         }
@@ -1435,7 +1650,20 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         const selectorUsage = await claimRoutingUsage(runtime, { runId: terminal.id });
         if (!ownsRouting(runtime, requestGeneration)) fail("Wait belonged to a previous session/branch.");
         if (!runtime.registry.markDelivered(terminal.id, runtime.key)) {
-          return { content: [{ type: "text", text: `Run ${terminal.id} was already delivered. Artifacts and sessions remain available in /subagents.` }], details: details(terminal.mode, terminal.results, terminal) };
+          return {
+            content: [{ type: "text", text: `Run ${terminal.id} was already delivered. Artifacts and sessions remain available in /subagents.` }],
+            details: details(terminal.mode, terminal.results, {
+              ...terminal,
+              presentation: {
+                kind: "receipt",
+                operation: "wait (already delivered)",
+                id: terminal.id,
+                receipt: "Already delivered; artifacts and sessions remain available in /subagents.",
+                observedAt: Date.now(),
+                durationKind: terminal.endedAt !== undefined ? "frozen" : "unknown",
+              } satisfies RunPresentation,
+            }),
+          };
         }
         const delivered = runtime.output.capOutputForDelivery(terminal.results);
         const text = [synthesisDiagnostic(terminal.summary), delivered.text || terminal.summary || "(no output)"].filter(Boolean).join("\n\n");
@@ -1531,7 +1759,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         const receipts = [...routingScope.receipts.values()];
         const selectorUsage = await claimRoutingUsage(runtime, { ids: new Set(receipts.map((receipt) => receipt.requestId)) });
         const text = [formatPlanText(mode, plan), synthesis ? `Optional synthesis: ${synthesis.state}${synthesis.state === "blocked" ? ` — ${synthesis.error}` : ` (${synthesis.plan.model})`}` : "", "Selector tokens are reported separately; TypeSafe currency is unreported. A later dispatch selects again."].filter(Boolean).join("\n");
-        return deliveredResult(text, { mode, plan, synthesis, routingReceipts: receipts, routingCurrency: "unreported" }, [], selectorUsage);
+        return deliveredResult(text, { mode, plan, synthesis, presentation: { kind: "plan", operation: "Plan · no child spawned" } satisfies RunPresentation, routingReceipts: receipts, routingCurrency: "unreported" }, [], selectorUsage);
       }
 
       const specs: TaskSpec[] = resolved.map(({ effectiveTools, resolutionNotes: _notes, ...task }) => ({
@@ -1718,9 +1946,10 @@ export default function registerSubagent(pi: ExtensionAPI): void {
 
       if (validated.async) {
         runtime.asyncRuns.add(runId);
+        refreshFooter(runtime);
         const selectorUsage = await claimRoutingUsage(runtime, { ids: workerReceiptIds });
         return deliveredResult(`Started run ${runId}. You will be notified on completion; use status/wait/cancel with this full id, or open /subagents. Selector currency is unreported.`,
-          { ...details(validated.mode as "single" | "parallel", []), routingReceipts: [...routingScope.receipts.values()], routingCurrency: "unreported" }, [], selectorUsage);
+          { ...details(validated.mode as "single" | "parallel", [], { id: runId, presentation: { kind: "startup", operation: "Started in background", id: runId } }), routingReceipts: [...routingScope.receipts.values()], routingCurrency: "unreported" }, [], selectorUsage);
       }
       const result = await work;
       if (!ownsRouting(runtime, executionGeneration)) fail("Subagent execution belonged to a previous session/branch; its final state remains on the originating branch.");
@@ -1750,16 +1979,36 @@ export default function registerSubagent(pi: ExtensionAPI): void {
     },
     renderCall(args, theme, context) {
       // Stable component identity: reuse the previous block and swap content.
+      // `subagent_wait` is delegated to the same renderer but the host passes
+      // its raw alias args (`{ id, timeout_ms }`), which need their own header.
+      const waitAlias = !args?.action && !args?.task && !Array.isArray(args?.tasks)
+        && typeof args?.id === "string" && args.id.length > 0;
       const block = (context.lastComponent instanceof LineBlock ? context.lastComponent : new LineBlock()) as LineBlock;
-      block.set((width) => [renderCallLine(args, theme, width)]);
+      block.set((width) => [waitAlias ? renderWaitCallLine(args, theme, width) : renderCallLine(args, theme, width)]);
       return block;
     },
     renderResult(result, options: ToolRenderResultOptions, theme, context) {
       const block = (context.lastComponent instanceof LineBlock ? context.lastComponent : new LineBlock()) as LineBlock;
       const detailsValue = result.details as ReturnType<typeof compactDetails> | undefined;
-      if (!detailsValue?.results?.length) {
+      // Historical/legacy payloads can miss `results` entirely (startup/error
+      // branches or an older persisted shape): render the same card vocabulary
+      // around the raw content instead of dumping unthemed lines.
+      if (!Array.isArray(detailsValue?.results) || !detailsValue.results.length) {
         const text = result.content.find((item) => item.type === "text")?.text ?? "(no output)";
-        block.set((width) => String(text).split("\n").map((line) => truncateToWidth(theme.fg("toolOutput", line), width)));
+        block.set((width) => {
+          const lines = renderFallbackLines(String(text), {
+            theme,
+            width,
+            expanded: options.expanded,
+            state: context.isError ? "failed" : undefined,
+            presentation: detailsValue?.presentation,
+          });
+          if (!options.expanded) {
+            const hint = expandHint();
+            lines.push(truncateToWidth(hint.includes("\u001b[") ? hint : theme.fg("dim", hint), width));
+          }
+          return lines;
+        });
         return block;
       }
       const run: InlineRunView = {
@@ -1767,7 +2016,9 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         state: detailsValue.state,
         startedAt: detailsValue.startedAt,
         endedAt: detailsValue.endedAt,
-        results: detailsValue.results.map((task: any) => ({
+        id: detailsValue.id,
+        presentation: detailsValue.presentation,
+        results: detailsValue.results.filter((task: any) => task && typeof task === "object").map((task: any) => ({
           label: task.label,
           state: task.state,
           usage: task.usage,
@@ -1786,6 +2037,8 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           stalledSince: task.stalledSince,
           attempts: task.attempts,
           attemptedModels: task.attemptedModels,
+          attemptedModelsTotal: task.attemptedModelsTotal,
+          modelAttemptsTotal: task.modelAttemptsTotal,
           toolActivity: task.toolActivity,
           toolDiagnostics: task.toolDiagnostics,
           modelAttempts: task.modelAttempts,
@@ -1795,13 +2048,17 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       };
       const active = options.isPartial && (isActiveState(detailsValue.state) || run.results.some((task) => isActiveState(task.state)) || detailsValue.state === undefined);
       block.set((width) => {
-        const lines = renderRunLines(run, {
-          theme,
-          width,
-          expanded: options.expanded,
-          isPartial: active,
-          spinnerFrame: liveSpinnerFrame(),
-        });
+        let lines: string[];
+        const text = result.content.filter((item) => item.type === "text").map((item) => item.text).join("\n");
+        try {
+          lines = renderRunLines(run, {
+            theme, width, expanded: options.expanded, isPartial: active,
+            spinnerFrame: active ? liveSpinnerFrame() : 0, evidence: text,
+          });
+        } catch {
+          // Historical details may be malformed; never throw from Component.render.
+          lines = renderFallbackLines(text, { theme, width, expanded: options.expanded, state: context.isError ? "failed" : undefined });
+        }
         if (!options.expanded && !active && run.results.some((task) => task.finalOutput || task.errorMessage)) {
           // keyHint output is already themed; only add color to the raw fallback.
           const hint = expandHint();
@@ -1820,25 +2077,17 @@ export default function registerSubagent(pi: ExtensionAPI): void {
   // TUI via appendEntry, which by design does NOT participate in LLM context.
   // So the parent agent keeps working, unaware, while the user gets an answer.
   // `/btw` results are custom entries: rendered for the human, invisible to the
-  // model. Keep it compact; expand shows the full answer.
+  // model. Keep it compact; expand shows the full answer. The card vocabulary is
+  // shared with other surfaces, but metrics stay absent because BtwEntry has
+  // never carried run/model/usage data.
   pi.registerEntryRenderer(BTW_ENTRY_TYPE, (entry, { expanded }, theme) => {
     const data = entry.data as BtwEntry | undefined;
     if (!data) return undefined;
-    return lineComponentForMessage((width) => {
-      const glyph = data.state === "done" ? theme.fg("success", "✓")
-        : data.state === "failed" ? theme.fg("error", "✗")
-        : theme.fg("dim", "…");
-      const lines = [truncateToWidth(`${glyph} ${theme.bold(theme.fg("toolTitle", "by the way"))} ${theme.fg("dim", data.label)}`, width)];
-      const body = data.answer;
-      if (body) {
-        const rendered = expanded ? body.split("\n") : [body.split("\n").find((line) => line.trim()) ?? ""];
-        for (const line of rendered) lines.push(truncateToWidth(`  ${theme.fg("toolOutput", line)}`, width));
-        if (!expanded && body.split("\n").length > 1) {
-          lines.push(truncateToWidth(theme.fg("dim", "  (expand for full answer)"), width));
-        }
-      }
-      return lines;
-    });
+    return lineComponentForMessage((width) =>
+      renderBtwLines(
+        { state: data.state, label: data.label, answer: data.answer },
+        { theme, width, expanded },
+      ));
   });
 
   pi.registerCommand("btw", {
@@ -1862,7 +2111,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
 
       const label = btwLabel(question);
       pi.appendEntry(BTW_ENTRY_TYPE, { state: "running", question, label } satisfies BtwEntry);
-      ctx.ui.notify(`by the way: ${label} — running in the background`, "info");
+      if ((ctx as { mode?: string }).mode !== "tui") ctx.ui.notify(`by the way: ${label} — running in the background`, "info");
 
       try {
         // Reuse the tool's own execute so /btw inherits validation, profiles,
@@ -1881,11 +2130,11 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         // The tool signals failure by throwing (fail()), so reaching here is success.
         const text = result.content.find((item) => item.type === "text")?.text ?? "(no output)";
         pi.appendEntry(BTW_ENTRY_TYPE, { state: "done", question, label, answer: String(text) } satisfies BtwEntry);
-        ctx.ui.notify(`by the way: ${label} — answered`, "info");
+        if ((ctx as { mode?: string }).mode !== "tui") ctx.ui.notify(`by the way: ${label} — answered`, "info");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         pi.appendEntry(BTW_ENTRY_TYPE, { state: "failed", question, label, answer: message } satisfies BtwEntry);
-        ctx.ui.notify(`by the way failed: ${message}`, "error");
+        if ((ctx as { mode?: string }).mode !== "tui") ctx.ui.notify(`by the way failed: ${message}`, "error");
       }
     },
   });
@@ -1913,7 +2162,11 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         ctx,
       );
     },
-    renderCall: subagentTool.renderCall as never,
+    renderCall(args, theme, context) {
+      const block = context.lastComponent instanceof LineBlock ? context.lastComponent : new LineBlock();
+      block.set((width) => [renderWaitCallLine(args, theme, width)]);
+      return block;
+    },
     renderResult: subagentTool.renderResult as never,
   });
 }

@@ -3,17 +3,22 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { RunSnapshot } from "./types.js";
 import {
-  formatCost,
+  displayLabel,
+  identityLine,
+  abbreviatedModel,
+  taskDetailLines,
+  markdownLines,
   formatDuration,
+  formatMetricsText,
+  formatModelList,
   formatState,
-  formatTokens,
-  formatPath,
   formatTaskDiagnostic,
   isActiveState,
   oneLine,
   SPINNERS,
   stateGlyph,
   taskDiagnostic,
+  widgetRunLines,
 } from "./format.js";
 import { tailSessionFile, type TailSessionStatus } from "./transcript.js";
 
@@ -96,22 +101,44 @@ function wrapLines(text: string, width: number): string[] {
   return Array.isArray(wrapped) ? wrapped : String(wrapped).split("\n");
 }
 
-function runStats(run: RunSnapshot, now: number): string {
+/** Aggregate turns/tokens/cost for one run; cost is included separately. */
+function runAggregate(run: RunSnapshot): { turns: number; tokens: number; cost: number } {
   let turns = 0, tokens = 0, cost = 0;
   for (const result of run.results) {
     turns += result.usage?.turns ?? 0;
     tokens += (result.usage?.input ?? 0) + (result.usage?.output ?? 0);
     cost += result.usage?.cost ?? 0;
   }
-  const parts: string[] = [];
-  if (turns) parts.push(`↻${turns}`);
-  if (tokens) parts.push(`${formatTokens(tokens)} tok`);
-  if (cost > 0.00005) parts.push(formatCost(cost));
-  parts.push(formatDuration((run.endedAt ?? now) - run.startedAt));
-  return parts.join(" · ");
+  return { turns, tokens, cost };
+}
+
+/**
+ * Honest duration for one run: terminal runs freeze at `endedAt`, live runs
+ * tick, and a run that never recorded an end time reports no duration rather
+ * than aging the render clock.
+ */
+function runDuration(run: RunSnapshot, now: number): { ms?: number; kind: "live" | "frozen" | "unknown" } {
+  if (isActiveState(run.state)) return { ms: Math.max(0, now - run.startedAt), kind: "live" };
+  if (run.endedAt !== undefined) return { ms: Math.max(0, run.endedAt - run.startedAt), kind: "frozen" };
+  return { kind: "unknown" };
+}
+
+/**
+ * Distinct models actually used by one run, in first-seen order. Each task
+ * contributes only its own model, so a parallel run never renders a false
+ * `a → b` retry chain; an explicit retry chain comes from `attemptedModels`.
+ */
+function runModels(run: RunSnapshot): string[] {
+  const models: string[] = [];
+  for (const result of run.results) {
+    const own = result.model ? [result.model] : [];
+    for (const model of own) if (!models.includes(model)) models.push(model);
+  }
+  return models;
 }
 
 function runTitle(run: RunSnapshot): string {
+  if (run.results[0]?.label) return displayLabel(run.results[0].label, 'Subagent');
   const preview = run.taskPreviews[0] ?? run.summary ?? "";
   const label = preview.includes(": ") ? preview.slice(preview.indexOf(": ") + 2) : preview;
   return oneLine(label || "(no task preview)", 100);
@@ -322,7 +349,7 @@ export class SubagentsOverlay implements Component {
     return lines;
   }
 
-  private listLines(width: number): string[] {
+  private listLines(width: number, headerRows: number): string[] {
     const theme = this.theme;
     const runs = this.runs();
     const lines: string[] = [];
@@ -334,26 +361,45 @@ export class SubagentsOverlay implements Component {
     }
     this.selected = Math.min(this.selected, runs.length - 1);
     const now = Date.now();
-    runs.forEach((run, index) => {
+    // Bound the list viewport so a long session cannot push the selection out
+    // of reach; the selected row is always inside the visible slice.
+    const available = Math.max(1, this.maxOverlayRows() - headerRows);
+    const rowHeight = available >= 6 ? 3 : 1;
+    const pageSize = Math.max(1, Math.floor((available - 3) / rowHeight));
+    const first = Math.max(0, Math.min(this.selected - pageSize + 1, Math.max(0, runs.length - pageSize)));
+    const visible = runs.slice(first, first + pageSize);
+    if (first > 0 && available >= 5) lines.push(theme.fg("dim", ` ↑ +${first} more`));
+    visible.forEach((run, offset) => {
+      const index = first + offset;
       const isSelected = index === this.selected;
       const cursor = isSelected ? theme.fg("accent", "▶") : " ";
       const glyph = stateGlyph(run.state, theme, this.frame);
-      const id = theme.fg("dim", run.id.slice(0, 8));
-      const state = isActiveState(run.state)
-        ? theme.fg("warning", formatState(run.state))
-        : ["failed", "lost"].includes(run.state)
-          ? theme.fg("error", formatState(run.state))
-          : theme.fg(run.delivered ? "muted" : "success", run.delivered ? formatState(run.state) : `${formatState(run.state)} · ready`);
-      const mode = run.mode === "parallel" ? theme.fg("accent", `${run.results.length} tasks`) : "";
-      const models = [...new Set(run.results.flatMap((result) => result.attemptedModels ?? (result.model ? [result.model] : [])))];
-      const modelText = models.length ? theme.fg("dim", models.join(" → ")) : "";
-      const meta = [state, mode, modelText, theme.fg("dim", runStats(run, now))].filter(Boolean).join(theme.fg("dim", " · "));
-      lines.push(truncateToWidth(`${cursor} ${glyph} ${id}  ${meta}`, width));
+      // Field order matches every other surface: id, state, task, then the
+      // optional metrics row. At narrow widths the metrics row is dropped
+      // before the state or id.
+      const stateText = run.delivered ? formatState(run.state) : isActiveState(run.state) ? formatState(run.state) : `${formatState(run.state)} · ready`;
+      const stateTone = ["failed", "lost"].includes(run.state) ? "error" : isActiveState(run.state) ? "warning" : run.delivered ? "muted" : "success";
       const title = runTitle(run);
-      const titleText = isSelected ? theme.fg("text", title) : theme.fg("muted", title);
-      lines.push(truncateToWidth(`     ${titleText}`, width));
+      if (rowHeight === 1) {
+        lines.push(truncateToWidth(`${cursor} ${glyph} ${stateText} [${run.id.slice(0, 8)}] ${title}`, width));
+        return;
+      }
+      lines.push(`${cursor} ${identityLine(title, run.id, theme, Math.max(1, width - 2))}`);
+      const duration = runDuration(run, now);
+      lines.push(truncateToWidth(`  ${glyph} ${theme.fg(stateTone, stateText)}${duration.ms === undefined ? '' : ` · ${formatDuration(duration.ms)}`}`, width));
+      const bits = [
+        run.mode === "parallel" ? `${run.results.length} tasks` : "",
+        formatModelList(runModels(run).map((model) => abbreviatedModel(model)!), 2),
+        ...(() => {
+          const agg = runAggregate(run);
+          const text = formatMetricsText({ turns: agg.turns, tokens: agg.tokens, cost: agg.cost });
+          return text ? [text] : [];
+        })(),
+      ].filter(Boolean);
+      lines.push(truncateToWidth(theme.fg("dim", `     ${bits.join(" · ")}`), width));
     });
-    lines.push("");
+    const hidden = runs.length - (first + visible.length);
+    if (hidden > 0 && lines.length < available - 1) lines.push(theme.fg("dim", ` ↓ +${hidden} more (↑↓ to scroll)`));
     lines.push(truncateToWidth(theme.fg("dim", " ↑↓ select · enter details · c cancel · s steer · o output · r resume · a apply · x discard · d dismiss · esc close"), width));
     return lines;
   }
@@ -382,9 +428,17 @@ export class SubagentsOverlay implements Component {
     const now = Date.now();
     const body: string[] = [];
 
+    // Same field order as every other surface: identity, explicit state with a
+    // truthful duration, then the secondary labelled metrics.
     const glyph = stateGlyph(run.state, theme, this.frame);
-    body.push(`${glyph} ${theme.fg("dim", run.id)}`);
-    body.push(theme.fg("dim", `${run.mode} · ${formatState(run.state)} · ${runStats(run, now)} · ${run.delivered ? "delivered" : "ready"}`));
+    const duration = runDuration(run, now);
+    const agg = runAggregate(run);
+    body.push(identityLine(runTitle(run), run.id, theme, width));
+    body.push(...wrapLines(`run: ${run.id}`, width));
+    body.push(theme.fg("dim", `${run.mode} · ${formatState(run.state)}${duration.ms !== undefined ? ` · ${formatDuration(duration.ms)}` : ""} · ${run.delivered ? "delivered" : "ready"}`));
+    const metrics = formatMetricsText({ turns: agg.turns, tokens: agg.tokens, cost: agg.cost });
+    if (metrics) body.push(theme.fg("dim", metrics));
+    // Full model identifiers are emitted once per task below.
 
     if (this.liveTranscript && isActiveState(run.state)) {
       body.push("");
@@ -411,9 +465,10 @@ export class SubagentsOverlay implements Component {
       run.results.forEach((result, index) => {
         body.push("");
         const rGlyph = stateGlyph(result.state, theme, this.frame);
-        const label = theme.bold(theme.fg("toolTitle", result.label || `task-${index + 1}`));
+        const label = theme.bold(theme.fg("toolTitle", displayLabel(result.label, `task-${index + 1}`)));
         const caps = [
-          result.model,
+          // Full provider/model id stays available in detail (never duplicated
+          // in the compact row).
           result.profile ? `${result.profile}/${result.canWrite ? "RW" : "RO"}` : "",
           result.effectiveThinking && result.effectiveThinking !== result.thinking
             ? `thinking:${result.thinking ?? "default"}→${result.effectiveThinking}`
@@ -423,28 +478,19 @@ export class SubagentsOverlay implements Component {
                 ? `thinking:${result.thinking}`
                 : "",
         ].filter(Boolean).join(" · ");
-        body.push(truncateToWidth(`${rGlyph} ${label} ${theme.fg("dim", caps)}`, width));
+        body.push(truncateToWidth(`${rGlyph} ${label} · ${formatState(result.state)}`, width));
+        if (caps) body.push(...wrapLines(caps, width).map((line) => theme.fg('dim', line)));
+        body.push(...taskDetailLines({ ...result, label: undefined }, theme, width));
         const diagnostic = taskDiagnostic(result);
         const diagnosticText = formatTaskDiagnostic(result);
         if (diagnostic && diagnosticText && diagnostic.kind !== "summary") {
           for (const line of wrapLines(diagnosticText, width - 2)) body.push(`  ${theme.fg(diagnostic.tone, line)}`);
         }
-        const usage = result.usage;
-        const stats = [
-          usage?.turns ? `↻${usage.turns}` : "",
-          `${formatTokens((usage?.input ?? 0) + (usage?.output ?? 0))} tok`,
-          usage?.cost ? `$${usage.cost.toFixed(4)}` : "",
-        ].filter(Boolean).join(" · ");
-        body.push(theme.fg("dim", `  ${stats}`));
-        const pointers = [
-          result.outputFile ? `→ ${formatPath(result.outputFile)}` : "",
-          result.sessionId ? `session ${result.sessionId.slice(0, 8)}` : "",
-          result.worktree ? `⎇ ${result.worktree.branch}` : "",
-        ].filter(Boolean);
-        if (pointers.length) body.push(truncateToWidth(theme.fg("dim", `  ${pointers.join(" · ")}`), width));
+
         const text = result.transcript || result.finalOutput;
         if (text) {
-          for (const line of wrapLines(text, width - 2)) body.push(`  ${theme.fg("toolOutput", line)}`);
+          const rendered = result.transcript ? wrapLines(text, width - 2) : markdownLines(text, theme, Math.max(1, width - 2));
+          for (const line of rendered) body.push(`  ${theme.fg("toolOutput", line)}`);
         } else if (!diagnostic || diagnostic.kind === "summary") {
           body.push(theme.fg("dim", "  (no output)"));
         }
@@ -478,10 +524,11 @@ export class SubagentsOverlay implements Component {
   render(width: number): string[] {
     this.syncAnimation();
     this.syncTranscriptPoll();
-    const header = this.header(width);
+    const maxRows = this.maxOverlayRows();
+    const header = this.header(width).slice(0, Math.max(0, maxRows - 4));
     const lines = [...header];
-    lines.push(...(this.detailId ? this.detailLines(width, header.length) : this.listLines(width)));
-    return lines.map((line) => truncateToWidth(line, width));
+    lines.push(...(this.detailId ? this.detailLines(width, header.length) : this.listLines(width, header.length)));
+    return lines.slice(0, maxRows).map((line) => truncateToWidth(line, Math.max(1, width)));
   }
 
   invalidate(): void {
@@ -571,4 +618,111 @@ export class SubagentsUIModel {
     return null;
   }
   isRunning(): boolean { return this.runs.some((run) => isActiveState(run.state)); }
+}
+
+/**
+ * Width-aware ambient widget for background runs.
+ *
+ * The host requires a `Component` factory for real TUI mode; RPC mode forwards
+ * only `string[]` and ignores factories, so `extension.ts` picks the
+ * appropriate install path. The widget renders through the shared dense rows
+ * (`widgetRunLines`) and owns a single animation interval that stops itself
+ * when nothing is live and is always cleared by the host's `dispose()` call.
+ */
+export interface WidgetRowSource {
+  /** Current live background runs, already filtered by the caller. */
+  getRuns(): RunSnapshot[];
+  /** Resolve theme replacements without reinstalling the widget. */
+  getTheme?(): Theme;
+  /** Optional registry subscription for immediate repaints. */
+  subscribe?(listener: () => void): () => void;
+}
+
+export class SubagentWidget implements Component {
+  private frame = 0;
+  private timer?: NodeJS.Timeout;
+  private disposed = false;
+  private unsubscribe?: () => void;
+  private tui?: TUI;
+  private theme?: Theme;
+
+  constructor(private readonly source: WidgetRowSource, theme?: Theme) {
+    this.theme = theme;
+  }
+
+  /** Bind the host's live collaborators; safe to call again on install. */
+  attach(tui: TUI, theme: Theme): Component & { dispose?(): void } {
+    if (this.disposed) return this;
+    this.tui = tui;
+    this.theme = theme;
+    if (!this.unsubscribe) {
+      this.unsubscribe = this.source.subscribe?.(() => {
+        if (this.disposed) return;
+        this.syncAnimation();
+        this.tui?.requestRender();
+      });
+    }
+    this.syncAnimation();
+    return this;
+  }
+
+  private liveRuns(): RunSnapshot[] {
+    return this.source.getRuns();
+  }
+
+  private syncAnimation(): void {
+    const running = this.liveRuns().length > 0;
+    if (running && !this.timer && !this.disposed) {
+      this.timer = setInterval(() => {
+        if (this.disposed) {
+          this.stopAnimation();
+          return;
+        }
+        this.frame = (this.frame + 1) % SPINNERS.length;
+        this.tui?.requestRender();
+        if (this.liveRuns().length === 0) this.stopAnimation();
+      }, 250);
+      this.timer.unref?.();
+    } else if (!running) {
+      this.stopAnimation();
+    }
+  }
+
+  private stopAnimation(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
+  render(width: number): string[] {
+    if (this.disposed) return [];
+    const theme = this.source.getTheme?.() ?? this.theme;
+    if (!theme) return [];
+    const runs = this.liveRuns().map((run) => ({
+      id: run.id,
+      state: run.state,
+      startedAt: run.startedAt,
+      mode: run.mode,
+      results: run.results,
+    }));
+    if (!runs.length) return [];
+    return widgetRunLines(runs, {
+      theme,
+      width: Math.max(1, width),
+      now: Date.now(),
+      spinnerFrame: this.frame,
+    });
+  }
+
+  invalidate(): void {
+    // Rendering derives from the adapter on every pass; nothing to cache.
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.stopAnimation();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.tui = undefined;
+  }
 }

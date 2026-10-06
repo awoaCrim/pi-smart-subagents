@@ -85,6 +85,7 @@ export interface CompletionDetailsTask {
   model?: string;
   attempts?: number;
   attemptedModels?: string[];
+  attemptedModelsTotal?: number;
   pointers: string[];
 }
 
@@ -102,6 +103,7 @@ export interface CompletionDetailsRun {
   model?: string;
   attempts?: number;
   attemptedModels?: string[];
+  attemptedModelsTotal?: number;
   pointers: string[];
   tasks: CompletionDetailsTask[];
 }
