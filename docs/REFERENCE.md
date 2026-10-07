@@ -12,13 +12,35 @@ This file stores the credential in plaintext. Restrict access to your user accou
 
 When upgrading from published npm `0.9.0`, remove `apiKeyEnv` and add `apiKey` with the actual key locally. The old field is rejected even if both fields are present. There is no environment fallback, automatic migration or default key. Published `0.9.0` still requires its older `apiKeyEnv` setup, while `0.10.0` uses the config-file credential contract.
 
-Reload or restart Pi after changing extension code. Subsequent dispatches re-read the config file, so a later key or routing-destination edit takes effect on the next decision without setting an environment variable or restarting the process. Provider credentials for execution models are configured independently using Pi's own authentication mechanisms. Rotate credentials exposed in source, logs or conversation.
+Reload or restart Pi after changing extension code or `toolMode`; let active tasks finish first because reload can cancel them. Subsequent dispatches re-read routing configuration, so a later key or routing-destination edit takes effect on the next decision without setting an environment variable or restarting the process. This does not hot-switch the registered tool mode. Provider credentials for execution models are configured independently using Pi's own authentication mechanisms. Rotate credentials exposed in source, logs or conversation.
 
 ---
 
+### Tool modes
+
+`toolMode` controls the model-facing request surface of `subagent`, not the child engine or a security sandbox. Both modes keep `subagent_wait` and existing run management. The default is `compact`, including upgrades without an explicit setting. To expose advanced parameters, merge this fragment into your existing `~/.pi/subagent.json` without replacing routing credentials or other settings:
+
+```json
+{ "toolMode": "full" }
+```
+
+Only exact `compact` and `full` values are accepted; missing or invalid values fall back to compact. There is no environment or per-call override. The extension captures the mode when it registers. Editing the file alone does not change current schemas, guidance or acceptance; reload or restart Pi after active tasks finish. An ordinary session change does not rebuild the tools, and reload can cancel active work.
+
+| Request surface | Compact | Full |
+| --- | --- | --- |
+| Shared task fields | `agent`, `description`, `profile`, `difficulty`, `cwd`, `timeout_ms`, `max_turns`, `max_cost`, `isolation` | All compact fields plus the advanced fields below |
+| Advanced task fields | Not exposed | `system_prompt`, `tools`, `grace_turns`, `max_retries`, `context`, `output`, `output_schema`, `output_mode`, `resume`, `fork_resume`, `include_wip`, `allow_shared_writes`, `keep_background` |
+| Root request fields | Shared fields plus `action`, `id`, `message`, `index`, `task`, `async`, `tasks` | Same plus `synthesis` |
+| Actions | `status`, `wait`, `cancel`, `steer`, `diff`, `apply`, `discard` | Same plus `plan` |
+| Property counts (root / task item) | 16 / 10 | 30 / 23 |
+
+A `tasks[]` item contains `task` plus the shared task fields for its mode. `subagent_wait` remains `id` plus optional `timeout_ms`. Hidden fields reject, even if false or empty, including in mixed parallel batches; they are not silently dropped. Neither mode exposes manual `model`, `fallback_models` or `thinking` controls. Full mode makes advanced options available but does not enable them automatically.
+
+Trusted named-agent and profile/config defaults still apply, including advanced defaults such as structured contracts or retry budgets. Existing results, session/artifact pointers and WIP worktrees remain collectable/manageable under compact. Resume requires full mode; compact status and inspector help explain this without preparing an unavailable call. The explicit-spec SDK and human `/btw` command keep their existing behavior.
+
 ### Quick usage
 
-These are request objects for the `subagent` tool, not shell commands. New work calls Jev; omit `model` and `fallback_models`.
+These are request objects for the `subagent` tool, not shell commands. Examples work in compact unless marked full. New work calls Jev; omit `model` and `fallback_models`.
 
 #### Foreground and named agents
 
@@ -44,19 +66,18 @@ A named agent supplies a persona and non-model defaults; Jev still chooses the e
 
 #### Parallel tasks and synthesis
 
-Parallel tasks default to `explore`. Optional synthesis starts an additional read-only child and has its own routing selection. Raw worker results remain available if synthesis fails.
+Parallel tasks default to `explore` and work in compact:
 
 ```json
 {
   "tasks": [
     { "task": "Audit backend error handling.", "description": "Backend audit" },
     { "task": "Audit frontend error handling.", "description": "Frontend audit" }
-  ],
-  "synthesis": "Merge both audits into one prioritized findings list."
+  ]
 }
 ```
 
-Omit `synthesis` when you only need the separate worker reports.
+In **full mode**, add `"synthesis": "Merge both audits into one prioritized findings list."` to the root request to start an additional read-only child with its own routing selection. Raw worker results remain available if synthesis fails.
 
 #### Background work and collection
 
@@ -92,7 +113,7 @@ An interrupted or timed-out wait does not cancel or consume a still-running task
 
 #### Inspect a paid plan
 
-A plan runs local preflights and Jev selection without spawning a child or creating a run entry. It can incur selector fees; a later dispatch selects again. It checks the same model/tool/budget/isolation resolution as a launch. Each resolved plan line reports the supplied `difficulty` (or `(unspecified)` when none was given).
+**Full mode.** A plan runs local preflights and Jev selection without spawning a child or creating a run entry. It can incur selector fees; a later dispatch selects again. It checks the same model/tool/budget/isolation resolution as a launch. Each resolved plan line reports the supplied `difficulty` (or `(unspecified)` when none was given).
 
 ```json
 {
@@ -125,7 +146,7 @@ Choose the lowest honest level. `simple` can steer Jev toward a candidate suited
 
 #### Structured output
 
-The child must produce a fenced `json:result` block matching the requested schema. After an otherwise successful answer, the parent validates it and allows one repair round. An unresolved schema failure preserves raw output as a partial result rather than discarding paid work. A terminal provider failure does not trigger a repair prompt or publish a structured result, even if its text contains valid JSON; it follows the availability-failure rules instead.
+**Full mode for an explicit `output_schema` request.** Trusted named-agent contracts still work in compact. The child must produce a fenced `json:result` block matching the requested schema. After an otherwise successful answer, the parent validates it and allows one repair round. An unresolved schema failure preserves raw output as a partial result rather than discarding paid work. A terminal provider failure does not trigger a repair prompt or publish a structured result, even if its text contains valid JSON; it follows the availability-failure rules instead.
 
 ```json
 {
@@ -144,7 +165,7 @@ The child must produce a fenced `json:result` block matching the requested schem
 
 #### Resume, fork and steering
 
-A fork starts from a branch of the persisted parent conversation. It is single-task only:
+**Full mode:** a fork starts from a branch of the persisted parent conversation. It is single-task only:
 
 ```json
 { "task": "Implement the plan we agreed on.", "context": "fork", "profile": "general" }
@@ -156,7 +177,7 @@ Find a resumable child session ID in status, then start a new invocation:
 { "task": "Continue from your findings and propose a fix plan.", "resume": "<session-id>" }
 ```
 
-Both operations select again. To guide an existing child instead, steer it; parallel runs use `index` to select the worker:
+Both operations select again. **Both modes** can steer an existing running child; parallel runs use `index` to select the worker:
 
 ```json
 { "action": "steer", "id": "<run-id>", "index": 0, "message": "Skip tests; focus on src and wrap up." }
@@ -166,7 +187,13 @@ Both operations select again. To guide an existing child instead, steer it; para
 
 A budget breach requests a final answer and allows the configured grace turns. `timeout_ms` is the absolute task deadline across local preflight, Jev routing, setup, queueing and child execution; status and terminal output distinguish a pre-spawn `timeout (routing)` from child `queued`, `starting`, `running` or `cancelling` timeout. Before any tool starts, a recognized model-availability failure can advance to the next candidate in Jev probability order. All attempts share the selected tools, task deadline and cumulative execution budgets. Switching does not call Jev again.
 
-`max_retries` is the total number of extra child attempts: `0` permits the initial attempt only, `1` permits at most two attempts, and `2` permits at most three. The built-in default is `1`; task, agent, profile and configuration overrides still apply. The list never wraps back to an earlier candidate. Pi's own in-process/provider retries are separate and unchanged, so a child can make multiple provider requests before the extension sees its final failure. See [ranked failover](#probability-ranked-failover) for the failure boundary.
+Both modes expose `timeout_ms`, `max_turns` and `max_cost`:
+
+```json
+{ "task": "Audit dependencies.", "profile": "review", "max_turns": 15, "timeout_ms": 300000 }
+```
+
+**Full mode** additionally exposes per-call `grace_turns` and `max_retries`. Trusted agent/profile/config defaults remain effective in compact. `max_retries` is the total number of extra child attempts: `0` permits the initial attempt only, `1` permits at most two attempts, and `2` permits at most three. The built-in default is `1`; task, agent, profile and configuration overrides still apply. The list never wraps back to an earlier candidate. Pi's own in-process/provider retries are separate and unchanged, so a child can make multiple provider requests before the extension sees its final failure. See [ranked failover](#probability-ranked-failover) for the failure boundary.
 
 ```json
 { "task": "Audit dependencies.", "profile": "review", "max_turns": 15, "grace_turns": 2, "max_retries": 1 }
@@ -252,7 +279,7 @@ Local policy activates the complete ordinary tool set that survives one Pi `getA
 
 Pi 0.99.0+ official non-direct, non-hidden definitions are native managed tools: they are carried automatically in the finalized child candidate allowlist and startup manifest, but are omitted from Jev questions and their activity remains host-owned. Older hosts without `exposure` metadata use Pi's default `direct` behavior. Source metadata is retained for provenance/diagnostics only, and annotations never establish write safety. The full finalized candidate allowlist (ordinary direct names plus derived native names) is sent as Pi's `--tools` set (`--no-tools` when empty). Before the real task prompt is sent, a verified private startup command confirms the selected model and negotiates the child-effective set from bounded ordinary-active/native-registration evidence; native names do not need to appear in the active list. A candidate that is absent in the child is reported as `omittedTools` and is non-fatal by default. An explicit `tools` request is carried as a forced capability requirement, so a missing requested name fails closed. Active names outside the finalized candidate set, duplicate/malformed evidence, or a source/model/nonce mismatch still abort with a startup diagnostic instead of broadening capabilities.
 
-Parallel write-capable tasks sharing one checkout are rejected unless each uses `isolation: "worktree"`, distinct `cwd`, or explicit `allow_shared_writes: true`.
+Parallel write-capable tasks sharing one checkout are rejected unless each uses `isolation: "worktree"`, distinct `cwd`, or explicit `allow_shared_writes: true` (full mode only).
 
 ---
 
@@ -262,6 +289,7 @@ Defaults can be overridden in `~/.pi/subagent.json`; runtime fields with an env 
 
 | Setting                 | Env var                               | Default                               |
 | ----------------------- | ------------------------------------- | ------------------------------------- |
+| `toolMode`             | -                                     | `compact` (registration-time; see [tool modes](#tool-modes)) |
 | `maxTasksPerRun`        | `PI_SUBAGENT_MAX_TASKS`               | 8                                     |
 | `maxActiveProcesses`    | `PI_SUBAGENT_MAX_ACTIVE`              | 4                                     |
 | `maxQueuedTasks`        | `PI_SUBAGENT_MAX_QUEUED`              | 32                                    |
@@ -388,7 +416,7 @@ Invoke with `{ task: "…", agent: "reviewer" }`. The agent file supplies person
 
 `taskDefaults` in `~/.pi/subagent.json` remains available for non-model fields such as thinking, budgets, and retry counts. Its legacy `model` and `fallbackModels` fields are ignored; model routing belongs to `jevRouting`, while tool activation is resolved locally from Pi's active metadata plus profile/explicit-tool policy. A profile `thinking` value overrides the selected candidate's optional `thinking` default. Invalid fields are dropped field-by-field.
 
-Notes on behavior:
+Notes on engine behavior (explicit advanced request fields below require full mode; trusted defaults and historical result management are unaffected):
 
 - `timeout_ms` is the absolute task deadline: local preflight, Jev selection, setup, queue time and runtime all count against it, and selection cannot reset it. Timed-out tasks report `state: "timeout"` with `timeoutPhase: "queued"|"starting"|"running"` so agents can retry capacity issues without confusing them for task failures.
 - Budget stops (`max_turns`, `max_cost`) trigger a **graceful wrap-up**: the child is steered to produce its final answer NOW and allowed `graceTurns` more turns before SIGTERM. Results end as `partial` with `wrappedUp: true` when the child concluded in time. `graceTurns: 0` restores immediate stops.

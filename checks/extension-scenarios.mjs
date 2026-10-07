@@ -6,38 +6,47 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson }) {
+let stateId = 0;
+export async function extensionFixture({ SRC, PI_ROOT, temp, theme, toolMode = 'compact', agents = [], overrides = {} }) {
   const require = createRequire(path.join(PI_ROOT, 'package.json'));
   const esbuild = require('esbuild');
-  const state = { pending: [], runtime: undefined, config: {}, widgetInstalls: 0, renders: 0 };
+  const state = { pending: [], runtime: undefined, config: {}, agents, widgetInstalls: 0, renders: 0,
+    configReads: 0, catalogReads: 0, toolCatalogReads: 0, activeToolReads: 0, registryStarts: 0, lookups: 0, deliveryClaims: 0,
+    preflights: 0, routes: 0, children: 0, resources: 0, routingConfigs: [], diffs: [] };
   globalThis.__subagentHarness = state;
   const source = (name) => path.join(SRC, 'src', name);
   const mocks = {
-    'config.js': `import { defaultConfig } from ${JSON.stringify(source('config.ts'))};
-      export { defaultConfig }; export const loadConfig = (c) => ({...defaultConfig,...c});
-      export const readConfigFile = async () => globalThis.__subagentHarness.config;`,
-    'agents.js': `export const discoverAgents=()=>new Map(); export const describeCatalog=()=>[];`,
+    'config.js': `import { sanitizeConfigOverrides } from ${JSON.stringify(source('config.ts'))};
+      export * from ${JSON.stringify(source('config.ts'))};
+      export const readConfigFile = async () => { const s=globalThis.__subagentHarness; s.configReads++; return sanitizeConfigOverrides(s.config,'offline-fixture'); };`,
+    'agents.js': `export { describeCatalog } from ${JSON.stringify(source('agents.ts'))};
+      export const discoverAgents=()=>{ const s=globalThis.__subagentHarness; s.catalogReads++; return new Map(s.agents.map(a=>[a.name,a])); };`,
     'launch.js': `export const createGetPiCommand=()=>()=>{throw Error('No process launches in harness')}; export const getLaunchResolution=()=>({});`,
     'process-lock.js': `export const runRecordSessionIds=()=>[]; export class ProcessLockManager {
+      constructor(){globalThis.__subagentHarness.resources++}
       reconcileOrphans=async()=>({reaped:[],alreadyDead:[]}); sweep(){} listRunRecords(){return []} dispose(){}
       acquireSessionLock(){return {ok:true}} releaseSessionLock(){} checkResumeAvailability(){return {status:'available'}}
     }`,
-    'worktree.js': `export class WorktreeManager { sweepAll=async()=>{}; isGitRepo=async()=>true;
+    'worktree.js': `export class WorktreeManager { constructor(){globalThis.__subagentHarness.resources++} sweepAll=async()=>{}; isGitRepo=async()=>true;
       archivedPatchPathFor=(cwd)=>cwd+'.patch';
-      diff=async()=>({stat:'a.ts | 450 +',patch:Array.from({length:450},(_,i)=>'+ evidence-'+i).join('\\n'),truncated:false});
+      diff=async(tree)=>{ globalThis.__subagentHarness.diffs.push(tree); return {stat:'a.ts | 450 +',patch:Array.from({length:450},(_,i)=>'+ evidence-'+i).join('\\n'),truncated:false}; };
       apply=async()=>({applied:true,stat:'a.ts | 2 +',warning:'Review staged changes'});
+      applyArchivedPatch=async()=>({applied:true,stat:'archived.ts | 2 +'});
       forceRemove=async()=>{};
     }`,
     'distill.js': `export const sweepSessionsLifecycle=async()=>{};`,
-    'dispatch-preflight.js': `export const runLocalPreflights=async()=>{};`,
-    'jev-router.js': `export class JevRouter { constructor(){} }`,
-    'dispatch-routing.js': `export const routePreparedTasks=async(tasks)=>tasks.map(t=>({...t,
-      model:'offline/model', effectiveTools:t.candidateTools, resolutionNotes:[],thinking:'off'}));`,
+    'dispatch-preflight.js': `export const runLocalPreflights=async()=>{globalThis.__subagentHarness.preflights++};`,
+    'jev-router.js': `export class JevRouter { constructor({config}){globalThis.__subagentHarness.routingConfigs.push(config)} }`,
+    'dispatch-routing.js': `import { finalizeRoutedTasks } from ${JSON.stringify(source('policy.ts'))};
+      export const routePreparedTasks=async(tasks,catalog)=>{ globalThis.__subagentHarness.routes++;
+        const resolved=finalizeRoutedTasks(tasks,tasks.map(()=>({selectedModel:catalog.models[0].model,confidence:1,
+          rankedModels:catalog.models.map((m,i)=>({model:m.model,probability:i===0?1:0}))})),catalog.models);
+        if(!resolved.ok) throw Error(resolved.error); return resolved.tasks; };`,
     'orchestrator.js': `export const runTasks=(specs, options)=>new Promise((resolve,reject)=>{
-      globalThis.__subagentHarness.pending.push({specs,options,resolve,reject});
+      const s=globalThis.__subagentHarness; s.children++; s.pending.push({specs,options,resolve,reject});
     });`,
   };
-  const outfile = path.join(temp, 'extension-integration.mjs');
+  const outfile = path.join(temp, `extension-integration-${toolMode}-${stateId++}.mjs`);
   await esbuild.build({
     entryPoints: [source('extension.ts')], outfile, bundle: true, format: 'esm', platform: 'node', target: 'node22',
     nodePaths: [path.join(PI_ROOT, 'node_modules')],
@@ -55,7 +64,7 @@ export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, e
       build.onLoad({ filter: /extension\.ts$/ }, (args) => {
         // Capture the closure-owned runtime for observation/seeding only. All
         // registered callbacks and execute paths stay the production code.
-        const contents = fs.readFileSync(args.path, 'utf8').replace(/    current = runtime;\r?\n/, '    current = runtime; globalThis.__subagentHarness.runtime = runtime;\n');
+        const contents = fs.readFileSync(args.path, 'utf8').replace(/    current = runtime;\r?\n/, '    current = runtime; globalThis.__subagentHarness.runtime = runtime; globalThis.__subagentHarness.adapter = makeAdapter(runtime, toolMode);\n');
         return { contents, loader: 'ts', resolveDir: path.dirname(args.path) };
       });
     }}],
@@ -76,7 +85,7 @@ export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, e
         mounted?.dispose?.();
         mounted = typeof value === 'function' ? value({ requestRender() { state.renders++; }, terminal: { rows: 24 } }, theme) : value;
       },
-      input: async () => '', confirm: async () => false, setEditorText() {},
+      input: async () => '', confirm: async () => false, setEditorText(text) { state.editor = text; },
     },
   };
   const pi = {
@@ -86,13 +95,18 @@ export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, e
     registerEntryRenderer: (name, renderer) => entryRenderers.set(name, renderer),
     appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }),
     sendMessage: (message, options) => messages.push({ message, options }),
-    getAllTools: () => [], getActiveTools: () => [], getThinkingLevel: () => 'off',
+    getAllTools: () => { state.toolCatalogReads++; return state.tools ?? []; },
+    getActiveTools: () => { state.activeToolReads++; return (state.tools ?? []).map(t=>t.name); }, getThinkingLevel: () => 'off',
   };
-  const config = { sessionDir: temp, worktreeDir: temp, lockDir: temp,
-    jevRouting: { apiKey: 'offline-fixture', selectorModel: 'fixture', timeoutMs: 15000, models: [{ model: 'offline/model', description: 'offline only' }] } };
+  const config = { sessionDir: temp, worktreeDir: temp, lockDir: temp, toolMode,
+    jevRouting: { apiKey: 'offline-fixture', selectorModel: 'fixture', timeoutMs: 15000, models: [{ model: 'offline/model', description: 'offline only' }] }, ...overrides };
   const start = async (mode = 'tui', overrides = {}) => {
     ctx.mode = mode; state.config = { ...config, ...overrides }; entries.length = messages.length = notices.length = 0;
     await events.get('session_start')({}, ctx);
+    for (const [name,counter] of [['start','registryStarts'],['lookup','lookups'],['markDelivered','deliveryClaims']]) {
+      const original=state.runtime.registry[name].bind(state.runtime.registry);
+      state.runtime.registry[name]=(...args)=>{ state[counter]++; return original(...args); };
+    }
     return state.runtime;
   };
   const call = (params, signal) => tools.get('subagent').execute('test', params, signal, undefined, ctx);
@@ -113,8 +127,27 @@ export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, e
     const result = await call({ task: 'Offline check', description: 'Fixture review', async: true, ...extra });
     return { result, id: result.details.id };
   };
+  state.config = config;
+  const oldTimeout = globalThis.setTimeout, oldInterval = globalThis.setInterval;
+  globalThis.setTimeout = globalThis.setInterval = () => { throw Error('Extension factory must not start timers'); };
   try {
-    register(pi);
+    await register(pi);
+  } catch (error) { clearInterval(keepAlive); globalThis.fetch = oldFetch; delete globalThis.__subagentHarness; throw error; }
+  finally { globalThis.setTimeout = oldTimeout; globalThis.setInterval = oldInterval; }
+  const close = async () => {
+    try { await events.get('session_shutdown')?.({}, ctx); } finally {
+      clearInterval(keepAlive); globalThis.fetch = oldFetch; delete globalThis.__subagentHarness;
+    }
+  };
+  return { state, entries, messages, notices, tools, commands, events, renderers, ctx, start, call, render, settle, launch, close,
+    get mounted() { return mounted; } };
+}
+
+export async function extensionScenarios(options) {
+  const { theme, TUI, ok, eq, eqJson, temp } = options;
+  const fixture = await extensionFixture({ ...options, toolMode: 'full' });
+  const { state, entries, messages, notices, tools, commands, events, renderers, ctx, start, call, render, settle, launch } = fixture;
+  try {
     ok(tools.has('subagent') && tools.has('subagent_wait'), 'real extension registers both tools');
     await start();
     const first = await launch();
@@ -125,13 +158,13 @@ export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, e
     const pending = state.pending[0];
     pending.options.onTaskProgress(0, { state: 'running', liveText: 'reading files' });
     await new Promise((resolve) => setTimeout(resolve, 150));
-    const component = mounted, installs = state.widgetInstalls, repaints = state.renders;
+    const component = fixture.mounted, installs = state.widgetInstalls, repaints = state.renders;
     ctx.ui.theme = { ...theme, fg: (_token, text) => `\u001b[31m${text}\u001b[39m` };
     ok(component.render(80).some((line) => line.includes('\u001b[31m')), 'mounted widget picks up a replaced host theme');
     ctx.ui.theme = theme;
     ok(component && typeof component.render === 'function', 'actual extension installs a component widget');
     await new Promise((resolve) => setTimeout(resolve, 550));
-    eq(mounted, component, 'host widget identity survives two timer ticks');
+    eq(fixture.mounted, component, 'host widget identity survives two timer ticks');
     eq(state.widgetInstalls, installs, 'repaint does not reinstall/dispose widget');
     ok(state.renders >= repaints + 2 && component.render(80).length > 0, 'widget remains visible while repainting');
     const status = await call({ action: 'status', id: first.id });
@@ -228,11 +261,8 @@ export async function extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, e
       }
     }
     await events.get('session_shutdown')({}, ctx);
-    ok(!mounted, 'shutdown clears installed widget');
+    ok(!fixture.mounted, 'shutdown clears installed widget');
   } finally {
-    try { await events.get('session_shutdown')?.({}, ctx); } catch {}
-    clearInterval(keepAlive);
-    globalThis.fetch = oldFetch;
-    delete globalThis.__subagentHarness;
+    await fixture.close();
   }
 }

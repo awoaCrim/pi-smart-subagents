@@ -78,8 +78,10 @@ a child.
 that the child has read it. `cancel` confirms a request, not completed shutdown.
 `diff`, `apply` and `discard` show operation evidence instead of an old child
 answer, including for parallel runs. Expanded evidence comes from the existing
-capped tool content. An additional visual cap has an explicit remainder and
-full-evidence pointer; underlying output/artifact limits remain unchanged.
+capped tool content. Historical structured output does not replace live or archived
+diff evidence; the original JSON result remains available through status/wait.
+An additional visual cap has an explicit remainder and full-evidence pointer;
+underlying output/artifact limits remain unchanged.
 
 Apply lands changes as uncommitted working-tree changes and preserves the
 worktree/archive. Warnings remain visible. Discard is explicit cleanup. Inspector
@@ -128,6 +130,8 @@ budget. Overflow counts and keyboard navigation keep the selected run reachable;
 very short terminals use a one-line entry. Details page through full identifiers,
 route/attempt/capability metadata, usage/cache breakdown, diagnostics, pointers
 and transcript/output.
+
+The tool surface defaults to compact; this is separate from compact visual layouts. In compact mode, session/output pointers remain visible, but resume help explains that `toolMode: "full"` plus reload/restart is required. Sessions with unverified ownership remain labelled `resume blocked` in status under either mode; changing mode does not clear that safety state. The inspector's `r` action warns instead of placing an unavailable resume request in the editor. Full mode retains the existing resume action. Finish active tasks before reloading; changing the config alone does not switch modes.
 
 Existing keys remain:
 

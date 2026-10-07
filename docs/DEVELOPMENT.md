@@ -39,7 +39,7 @@ Keep engine rules in their owning modules. The extension is a composition root, 
 
 ### Checks available in this checkout
 
-There are no npm scripts, devDependencies or TypeScript project configuration. The checkout includes a focused offline TUI regression harness under `checks/`, not a repository-wide engine test suite. `npm test`, `npm run typecheck` and the upstream release-check scripts are not available here. Installing dependencies alone does not create those commands. The historical [plan](PLAN.md) and [roadmap](ROADMAP.md) refer to upstream tooling and previous release work.
+There are no npm scripts, devDependencies or TypeScript project configuration. The checkout includes a focused offline TUI and tool-surface regression harness under `checks/`, not a repository-wide engine test suite. `npm test`, `npm run typecheck` and the upstream release-check scripts are not available here. Installing dependencies alone does not create those commands. The historical [plan](PLAN.md) and [roadmap](ROADMAP.md) refer to upstream tooling and previous release work.
 
 #### Documentation and whitespace
 
@@ -59,7 +59,7 @@ git diff --cached --check
 
 These commands do not check Markdown links, translation accuracy or untracked files. Review those separately. Documentation-only changes do not require a provider call or a claim that engine tests passed.
 
-#### Offline TUI regression harness
+#### Offline TUI and tool-surface regression harness
 
 With Pi and its esbuild/TUI peers already installed:
 
@@ -79,7 +79,32 @@ management execution, with deterministic config/provider/process/worktree
 boundaries. It uses the installed Pi TUI for ANSI/CJK width and Box-padding
 checks. It does not read user credentials, call Jev/providers, modify user
 settings or write to the checkout unless `--fixtures` explicitly targets it.
+The mode fixtures await async registration and check compact/full schemas, raw
+field gating before dispatch, registration snapshots, trusted defaults, historical
+result management, wait-alias validation and once-only delivery. Full-only plan
+coverage uses explicit full configuration. Payload-size checks use fixed synthetic
+catalogs and routing data; UTF-8 bytes are not token, latency or memory measurements.
 This is not a semantic typecheck or an interactive terminal smoke test.
+
+#### Tool-surface size fixture
+
+`checks/surface-fixture.mjs` measures registered definitions for both tools plus
+injected routing guidance using empty and fixed synthetic named-agent catalogs.
+It uses fake config and one synthetic candidate, never the user's settings.
+Use an existing baseline commit and output paths outside the public package:
+
+```bash
+node checks/surface-fixture.mjs --revision <baseline-commit> --output /tmp/subagent-before.json
+node checks/surface-fixture.mjs --baseline /tmp/subagent-before.json --output /tmp/subagent-after.json
+```
+
+Like the main harness, it accepts `--pi-root` for installed peers and downloads
+nothing. Results contain normalized serialized UTF-8 byte counts, field counts
+and skill bytes. `--baseline` requires identical fixture data and checks compact
+payload <=60%, full payload <=100%, and skill <=50% of baseline bytes; a failed size
+gate exits nonzero. Compare the same catalog in each revision. Git blob skill bytes
+may differ from Windows checkout bytes because of CRLF conversion, so report the
+chosen baseline and do not count a newline conversion as an instruction change.
 
 #### Offline TypeScript syntax check
 

@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionContext, Theme, ToolRenderResultOptions } f
 import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { Usage } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
-import { defaultConfig, loadConfig, readConfigFile, type SubagentConfig } from "./config.js";
+import { defaultConfig, loadConfig, readConfigFile, type SubagentConfig, type ToolMode } from "./config.js";
 import {
   compactTaskDiagnostic,
   formatDuration,
@@ -39,7 +39,8 @@ import type { ChildRunner } from "./runner.js";
 import { ProcessLockManager, runRecordSessionIds } from "./process-lock.js";
 import { SessionScopedRunRegistry, snapshotFromLiveRun } from "./registry.js";
 import {
-  ProviderSubagentParamsSchema,
+  providerSubagentSchema,
+  subagentSurfaceError,
   ProviderSubagentWaitParamsSchema,
   SubagentParamsSchema,
   SubagentWaitParamsSchema,
@@ -138,7 +139,7 @@ function ledger(runtime: SessionRuntime): UsageLedger {
   return runtime.ledgerValue;
 }
 
-function makeAdapter(runtime: SessionRuntime): SubagentAdapter {
+function makeAdapter(runtime: SessionRuntime, toolMode: ToolMode): SubagentAdapter {
   return {
     getActiveRuns: () => runtime.registry.getLiveRuns(runtime.key).map(snapshotFromLiveRun),
     getCompletedRuns: () => runtime.registry.getSnapshots(runtime.key),
@@ -153,6 +154,10 @@ function makeAdapter(runtime: SessionRuntime): SubagentAdapter {
     },
     dismissRun: (id) => { runtime.registry.markDismissed(id, runtime.key); },
     async resumeRun(id) {
+      if (toolMode === "compact") {
+        runtime.ctx.ui.notify('Resume requires toolMode: "full" in ~/.pi/subagent.json and reload/restart after active work finishes.', "info");
+        return;
+      }
       const run = this.getRunById(id);
       const session = run?.results.find((result) => result.sessionId)?.sessionId;
       if (!session) {
@@ -456,14 +461,17 @@ function deliveredResult<TDetails>(
 
 /** Status lines advertising resumable child session ids under a finished run. */
 function resumableSessionLines(
-  snapshot: { state?: RunSnapshot["state"]; results: Array<{ sessionId?: string }> },
+  snapshot: { state?: RunSnapshot["state"]; resumeBlocked?: boolean; results: Array<{ sessionId?: string }> },
   full: boolean,
+  toolMode: ToolMode,
 ): string[] {
   if (snapshot.state && isActiveState(snapshot.state)) return [];
   const lines: string[] = [];
   for (const result of snapshot.results) {
     if (!result.sessionId) continue;
-    lines.push(full ? `  session ${result.sessionId}` : `  session ${result.sessionId.slice(0, 8)} (resumable)`);
+    const hint = snapshot.resumeBlocked ? "resume blocked"
+      : toolMode === "full" ? "resumable" : "resume requires full mode + reload";
+    lines.push(`  session ${full ? result.sessionId : result.sessionId.slice(0, 8)} (${hint})`);
   }
   return lines;
 }
@@ -543,31 +551,20 @@ function agentCatalog(runtime: SessionRuntime): Map<string, AgentDefinition> {
   return runtime.agents;
 }
 
-function guidelines(catalog?: Map<string, AgentDefinition>): string[] {
-  const agentLines = catalog?.size
-    ? [
-        "Named agents available via agent:'<name>' (persona prompt + trusted defaults; request fields may refine supported options; thinking is not a request field):",
-        ...describeCatalog(catalog).map((line) => `  - ${line}`),
-      ]
-    : [];
+function guidelines(toolMode: ToolMode, catalog?: Map<string, AgentDefinition>): string[] {
   return [
-    ...agentLines,
-    "Omit model, fallback_models and thinking on all new work. Jev selects the execution model from the user-maintained dedicated candidate list; local policy activates the complete ordinary candidate set and startup negotiates the child-effective intersection. Explicit legacy model/fallback fields are rejected; thinking comes from trusted agent/profile/candidate defaults, difficulty and the parent host level.",
-    "action:plan calls Jev and may incur selector fees, but starts no child. Later dispatch selects again. Jev failure stops new dispatch; existing-run management requires no routing config or key.",
-    "Delegate independent, read-heavy exploration or clean-context review; keep tightly coupled work in the parent.",
-    "Prefer agent:'<name>' when a named agent matches the task — its persona prompt is usually better than an improvised one. Compose fields manually only when no agent fits.",
-    "Give every task a short description label (3-5 words) so runs are scannable in UIs and result indexes.",
-    "Set difficulty on every new task so Jev can weigh scope and reasoning demand: simple (bounded read-only review, docs/format checks, local verification), moderate (multi-file analysis, ordinary fix, focused research), complex (architecture, cross-layer implementation, unknown-root-cause debugging, high-risk change). Choose the lowest truthful level; difficulty is not a fixed model tier or permission change, but it supplies the small adaptive thinking default (simple→minimal, moderate→medium, complex→high) when no stronger thinking setting exists.",
-    "Profiles: explore/review reject ordinary write-capable tools; general permits the parent's active locally permitted catalog and may write. Local policy builds the ordinary candidate set; Jev selects only the model and receives no tool descriptions. Pi's official non-direct, non-hidden exposure tools are native managed definitions: they are not ordinary candidates, are carried automatically, and their child-registration evidence is negotiated while Pi controls their activity; unforced missing names are recorded as omitted. Direct SDK/custom tools remain ordinary candidates; source metadata and annotations do not grant safety. Explicit tools are an ordinary ceiling and forced capability requirement; agent tool defaults do not narrow candidates. Single tasks default to general, parallel tasks to explore.",
-    "Parallel writers need isolation:'worktree' (each gets an isolated checkout; changed work lands on a branch). After a worktree run finishes, use action:'diff' to inspect, then 'apply' to bring changes into the main checkout or 'discard' to drop them.",
-    "Set budgets: at max_turns/max_cost the child is steered to wrap up and given grace turns for a final answer (grace_turns tunes this); results end as 'partial' with wrappedUp:true when the child concluded. timeout_ms includes Jev selection, setup, queue and retries; max_cost excludes unreported TypeSafe currency; timeout results report the phase.",
-    "Transient child failures may retry within the same invocation: ranked Jev routes advance to the next probability-ranked candidate only for a recognized model-availability failure that settles before any tool execution, sharing one task-based tool set and the total max_retries attempt budget (0 = first attempt only; never wraps back). A tool that started, uncertain evidence, or auth/quota/context/schema failures stop without switching. No selector retries or emergency models are used. Task-quality failures never retry.",
-    "context:'fork' starts a single child from a branched copy of this conversation — use it when the task depends on discussion context instead of re-explaining. Single-task only.",
-    "Use async:true only when you have independent work meanwhile; then use action:'wait' with the run id (interruptible, does not cancel). action:'steer' injects mid-run guidance into a running child instead of cancel + retry.",
-    "For parallel research, add synthesis:'<instruction>' to have one read-only child fold all outputs into a single brief, delivered first.",
-    "Use output_schema (JSON Schema) when you need a machine-readable result: the child must end with a validated json:result block, invalid output gets one automatic repair round, and delivery is the clean JSON. Compose downstream steps from details.results[].structuredOutput.",
-    "Use output_mode:'file-only' for large reports; the parent gets a pointer instead of inline text.",
-    "Discover finished child session ids from action:'status' (listed as session <id8> (resumable)), then continue with resume: \"<session id>\"; fork_resume:true branches it instead.",
+    ...(catalog?.size ? ["Named agents (persona + trusted defaults):", ...describeCatalog(catalog).map((line) => `  - ${line}`)] : []),
+    `Subagent surface: ${toolMode}. Advanced request controls require toolMode:"full" and reload/restart after active work finishes. Trusted agent/config defaults still apply.`,
+    "Delegate independent work; keep tightly coupled steps in the parent. Prefer a matching named agent. Give each task a 3-5 word description and the lowest truthful difficulty: simple, moderate or complex.",
+    "Single tasks default to general (may write), parallel tasks to explore; explore/review restrict ordinary write tools, not OS permissions. Native tools retain host semantics.",
+    "Parallel writers need isolation:'worktree' or distinct cwd. Inspect action:'diff' before 'apply' (uncommitted changes) or 'discard'.",
+    "timeout_ms includes preflight, routing, queue and retries. max_turns/max_cost are soft wrap-up budgets; partial output survives. max_cost excludes unreported selector currency.",
+    "Use async:true only with independent work meanwhile; collect via subagent_wait. Wait timeout/abort leaves work alive; cancel stops it, steer adds guidance. Status is a preview; full delivery/usage is once-only.",
+    ...(toolMode === "full" ? [
+      "Full opt-ins: resume/fork_resume continue sessions; context:'fork' uses persisted parent history (single task). synthesis adds a read-only child and cost. output_schema validates fenced json:result with one repair; output_mode:'file-only' needs output.",
+      "tools sets ordinary required capabilities; system_prompt appends instructions. max_retries/grace_turns tune existing budgets. include_wip requires worktree; keep_background and unsafe allow_shared_writes are explicit, never mode defaults.",
+      "action:'plan' previews routing/preflight without a child but incurs selector fees; later dispatch selects again.",
+    ] : []),
   ];
 }
 
@@ -749,7 +746,7 @@ function scheduleMaintenance(runtime: SessionRuntime): void {
   })().catch(() => { /* maintenance is best effort */ });
 }
 
-export default function registerSubagent(pi: ExtensionAPI): void {
+export default async function registerSubagent(pi: ExtensionAPI): Promise<void> {
   let current: SessionRuntime | undefined;
 
   // Fail-closed depth parse (malformed env) walks past any plausible ceiling so we
@@ -761,6 +758,9 @@ export default function registerSubagent(pi: ExtensionAPI): void {
   // Parent set spawns:false (or a malformed PI_SUBAGENT_SPAWNS) — no tool surface
   // for further nesting. Accidental-recursion guard only; not a security boundary.
   if (parseSpawnPolicy(process.env[SPAWNS_ENV_VAR]).kind === "disabled") return;
+
+  // Registration owns the surface. Later reads refresh routing, never this mode.
+  const toolMode = loadConfig(await readConfigFile()).toolMode;
 
   function ownsRouting(runtime: SessionRuntime, generation: number): boolean {
     return current === runtime && !runtime.closed && runtime.routingGeneration === generation
@@ -920,7 +920,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", async (event) => {
     const config = loadConfig(await readConfigFile());
-    return { systemPrompt: `${event.systemPrompt}\n\n${formatJevRoutingPrompt(config.jevRouting, config.jevRoutingError)}` };
+    return { systemPrompt: `${event.systemPrompt}\n\n${formatJevRoutingPrompt(config.jevRouting, config.jevRoutingError, toolMode)}` };
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -1059,7 +1059,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       refreshFooter(runtime);
     });
     if (ctx.hasUI) {
-      runtime.footer = new FooterStatusModel(makeAdapter(runtime));
+      runtime.footer = new FooterStatusModel(makeAdapter(runtime, toolMode));
       runtime.footer.setOnUpdate(() => refreshFooter(runtime));
     }
     current = runtime;
@@ -1181,7 +1181,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       const runtime = current;
       if (!runtime || runtime.key !== sessionKey(ctx)) return ctx.ui.notify("Subagent runtime is not ready", "error");
       await ctx.ui.custom(
-        (tui: TUI, theme: Theme, _keybindings, done) => createSubagentsOverlay(tui, theme, makeAdapter(runtime), () => done(undefined)),
+        (tui: TUI, theme: Theme, _keybindings, done) => createSubagentsOverlay(tui, theme, makeAdapter(runtime, toolMode), () => done(undefined)),
         {
           overlay: true,
           overlayOptions: {
@@ -1193,34 +1193,21 @@ export default function registerSubagent(pi: ExtensionAPI): void {
     },
   });
 
-  const subagentTool = {
-    name: "subagent",
-    label: "Subagent",
-    description: "Run isolated Pi subagents in foreground, parallel, or cancellable background mode.",
-    // Guidelines are baked into the system prompt at registration (extension
-    // load runs per-session in the project cwd). Agents added mid-session are
-    // usable immediately via agent:'name' (execute-time refresh); only the
-    // system-prompt advertisement waits for the next session.
-    promptGuidelines: guidelines(discoverAgents(process.cwd())),
-    parameters: ProviderSubagentParamsSchema,
-    async execute(_id, params: SubagentParams, signal, onUpdate, ctx) {
-      // `subagent_wait` delegates here with a synthesized action:"wait" params
-      // object, carrying its timeout through this non-schema field so the two
-      // tools share exactly one collect/deliver path.
-      let waitTimeoutMs: number | undefined;
-      if ("__waitTimeoutMs" in (params as object)) {
-        const smuggled = params as SubagentParams & { __waitTimeoutMs?: number };
-        waitTimeoutMs = smuggled.__waitTimeoutMs;
-        // Strip before validation: the schema is additionalProperties:false.
-        delete smuggled.__waitTimeoutMs;
+  type ToolExecute = Parameters<ExtensionAPI["registerTool"]>[0]["execute"];
+  // Both tools share this one execution/delivery body. Wait timeout is private,
+  // not a caller property that could evade the closed envelope validator.
+  async function executeSubagent(_id: string, params: SubagentParams, signal: AbortSignal | undefined,
+    onUpdate: Parameters<ToolExecute>[3], ctx: ExtensionContext, waitTimeoutMs?: number,
+  ): Promise<Awaited<ReturnType<ToolExecute>>> {
+      const surfaceError = subagentSurfaceError(params, toolMode);
+      if (surfaceError) fail(surfaceError);
+      if (!Value.Check(SubagentParamsSchema, params)) {
+        const errors = [...Value.Errors(SubagentParamsSchema, params)].slice(0, 5).map((error: any) => error.message).join("; ");
+        fail(`Invalid parameters: ${errors}`);
       }
       const runtime = current;
       if (!runtime || runtime.closed || runtime.key !== sessionKey(ctx)) {
         fail("Subagent runtime is not initialized for this session.");
-      }
-      if (!Value.Check(SubagentParamsSchema, params)) {
-        const errors = [...Value.Errors(SubagentParamsSchema, params)].slice(0, 5).map((error: any) => error.message).join("; ");
-        fail(`Invalid parameters: ${errors}`);
       }
 
       const requestGeneration = runtime.routingGeneration;
@@ -1355,7 +1342,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
             : "";
           const text = [
             runs.length
-              ? runs.map((run) => [formatStatusPreview(run), ...resumableSessionLines(run, false)].join("\n")).join("\n")
+              ? runs.map((run) => [formatStatusPreview(run), ...resumableSessionLines(run, false, toolMode)].join("\n")).join("\n")
               : "No subagent runs.",
             agentSection,
             formatLedger(ledger(runtime)),
@@ -1375,7 +1362,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
         if (validated.mode === "status") {
           const text = [
             formatStatusPreview(snapshot),
-            ...resumableSessionLines(snapshot, true),
+            ...resumableSessionLines(snapshot, true, toolMode),
             formatLedger(ledger(runtime)),
           ].filter(Boolean).join("\n");
           return {
@@ -1414,7 +1401,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           };
         }
         if (validated.mode === "steer") {
-          if (!("controller" in found.run)) fail(`Run ${snapshot.id} is not running; steer only applies to live runs. Use resume to continue a finished child.`);
+          if (!("controller" in found.run)) fail(`Run ${snapshot.id} is not running; steer only applies to live runs. ${toolMode === "full" ? "Use resume to continue a finished child." : 'Resume requires toolMode: "full" and reload/restart after active work finishes.'}`);
           const runners = runtime.liveRunners.get(snapshot.id);
           if (!runners?.size) fail(`Run ${snapshot.id} has no steerable child yet (still queued or starting). Retry in a moment.`);
           const eligible = validated.index !== undefined
@@ -1466,7 +1453,7 @@ export default function registerSubagent(pi: ExtensionAPI): void {
           }
           if (validated.mode === "diff" && archiveExists) {
             const patch = await fs.readFile(archivedPatch, "utf8");
-            const capped = runtime.output.capOutputForDelivery([{ ...chosen.result, finalOutput: `Worktree was reclaimed; archived patch for run ${snapshot.id} task ${chosen.index} (branch ${tree.branch}):\n\n${patch}`, outputMode: "inline" }] as any);
+            const capped = runtime.output.capOutputForDelivery([{ ...chosen.result, structuredOutput: undefined, finalOutput: `Worktree was reclaimed; archived patch for run ${snapshot.id} task ${chosen.index} (branch ${tree.branch}):\n\n${patch}`, outputMode: "inline" }] as any);
             return {
               content: [{ type: "text", text: capped.text }],
               details: details(snapshot.mode, snapshot.results, {
@@ -1524,7 +1511,9 @@ export default function registerSubagent(pi: ExtensionAPI): void {
               diff.patch || "(no patch)",
               diff.truncated ? `\n[patch truncated; full diff: git -C ${tree.cwd} diff ${tree.baseCommit}]` : "",
             ].filter(Boolean).join("\n");
-            const capped = runtime.output.capOutputForDelivery([{ ...chosen.result, finalOutput: text, outputMode: "inline" }] as any);
+            // This is operation evidence, not a redelivery of a historical JSON result.
+            // The original structured result remains in snapshot/details and wait.
+            const capped = runtime.output.capOutputForDelivery([{ ...chosen.result, structuredOutput: undefined, finalOutput: text, outputMode: "inline" }] as any);
             return {
               content: [{ type: "text", text: capped.text }],
               details: details(snapshot.mode, snapshot.results, {
@@ -1976,6 +1965,17 @@ export default function registerSubagent(pi: ExtensionAPI): void {
       } finally {
         routingScope?.finish();
       }
+  }
+
+  const subagentTool = {
+    name: "subagent",
+    label: "Subagent",
+    description: "Delegate isolated Pi tasks: single, parallel, or background; manage runs and worktree results.",
+    // Catalog/mode advertisement is registration-scoped; execution refreshes personas.
+    promptGuidelines: guidelines(toolMode, discoverAgents(process.cwd())),
+    parameters: providerSubagentSchema(toolMode),
+    execute(_id, params: SubagentParams, signal, onUpdate, ctx) {
+      return executeSubagent(_id, params, signal, onUpdate, ctx);
     },
     renderCall(args, theme, context) {
       // Stable component identity: reuse the previous block and swap content.
@@ -2147,20 +2147,14 @@ export default function registerSubagent(pi: ExtensionAPI): void {
     name: "subagent_wait",
     label: "Subagent wait",
     description:
-      "Block until a background subagent run (async:true) settles, then deliver its output. Equivalent to subagent { action: 'wait', id }. Aborting or timing out leaves the run alive and collectable; use subagent { action: 'cancel' } to stop it.",
+      "Collect a background run once. Wait timeout/abort leaves it alive; action:cancel stops it. Shares subagent action:wait delivery.",
     parameters: ProviderSubagentWaitParamsSchema,
     async execute(id, params: SubagentWaitParams, signal, onUpdate, ctx) {
-      return subagentTool.execute(
-        id,
-        {
-          action: "wait",
-          id: params.id,
-          ...(params.timeout_ms !== undefined ? { __waitTimeoutMs: params.timeout_ms } : {}),
-        } as SubagentParams,
-        signal,
-        onUpdate as never,
-        ctx,
-      );
+      if (!Value.Check(SubagentWaitParamsSchema, params)) {
+        const errors = [...Value.Errors(SubagentWaitParamsSchema, params)].slice(0, 5).map((error: any) => error.message).join("; ");
+        fail(`Invalid wait parameters: ${errors}`);
+      }
+      return executeSubagent(id, { action: "wait", id: params.id }, signal, onUpdate, ctx, params.timeout_ms);
     },
     renderCall(args, theme, context) {
       const block = context.lastComponent instanceof LineBlock ? context.lastComponent : new LineBlock();

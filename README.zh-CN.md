@@ -26,6 +26,14 @@ pi install npm:@cr1ms0n/pi-subagent
 
 Jev 选择模型，不逐个选择工具。本地策略控制允许的工具集，启动时检查子代理实际可用的能力。显式请求的工具必须可用，详细规则见[工具策略与路由参考](docs/REFERENCE.md#jev-routing)。
 
+默认的 **compact（精简）** 模式保留常规委派、并行与后台任务、预算和工作树管理。如需恢复会话、汇总、结构化输出等高级请求参数，请将以下字段合并到 `~/.pi/subagent.json`，等活动任务结束后重新加载或重启 Pi：
+
+```json
+{ "toolMode": "full" }
+```
+
+参数划分和升级行为见[工具模式说明](docs/REFERENCE.md#tool-modes)。
+
 - 使用 `/subagents` 查看和管理任务。
 - 使用 `/subagent-cost` 查看用量。
 - 命名代理、并行任务、后台执行、工作树和结构化结果见[使用参考](docs/REFERENCE.md#quick-usage)，键盘操作见 [TUI 指南](docs/UX.md)。
@@ -39,6 +47,6 @@ Jev 选择模型，不逐个选择工具。本地策略控制允许的工具集�
 
 [MIT](LICENSE)。Copyright (c) 2026 Luke Parke。社区分支由 cr1ms0n（awoaCrim）维护。重新分发时请保留原始版权声明和许可证。
 
-译自 [README.md](README.md)，英文文件 blob：`50041c0f647d320976aed559f55ad0344128f171`。中英文内容如有差异，以英文为准。
+译自 [README.md](README.md)，英文文件 blob：`cb66c38c98d213e0868fafb6f3487d4ae103cf46`。中英文内容如有差异，以英文为准。
 
 感谢 [Linux.do](https://linux.do/)。

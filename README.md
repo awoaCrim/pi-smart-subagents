@@ -26,6 +26,14 @@ Ask Pi, for example:
 
 Jev selects the model, not individual tools. Local policy controls the permitted tool set, and startup checks which capabilities are available in the child. An explicitly requested tool must be available. See the [tool policy and routing reference](docs/REFERENCE.md#jev-routing) for details.
 
+The default **compact** mode keeps ordinary delegation, parallel/background tasks, budgets and worktree management. For advanced request controls such as resume, synthesis and structured output, merge this field into `~/.pi/subagent.json`, then reload or restart Pi after active tasks finish:
+
+```json
+{ "toolMode": "full" }
+```
+
+See [tool modes](docs/REFERENCE.md#tool-modes) for the field split and upgrade behavior.
+
 - Open `/subagents` to inspect and manage tasks.
 - Open `/subagent-cost` to view usage.
 - See the [usage reference](docs/REFERENCE.md#quick-usage) for named agents, parallel tasks, background work, worktrees and structured results, or the [TUI guide](docs/UX.md) for keyboard controls.

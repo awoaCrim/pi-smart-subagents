@@ -22,6 +22,7 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { extensionScenarios } from './extension-scenarios.mjs';
+import { surfaceScenarios } from './surface-scenarios.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -570,6 +571,9 @@ try {
 
   section('actual extension registration and execution');
   await extensionScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson });
+
+  section('compact/full surface, raw gates and registration lifecycle');
+  await surfaceScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson });
 
   // -------------------------------------------------------------------------
   section("single-run render regression fixtures");

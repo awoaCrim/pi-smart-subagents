@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## 0.11.14 — 2026-10-07
+
+- Default to a compact subagent request surface with ordinary delegation, parallel/background tasks, budgets and worktree management. Advanced controls remain available with `toolMode: "full"`; upgrades without an explicit setting use compact. See [tool modes](docs/REFERENCE.md#tool-modes) for reload behavior and compatibility.
+- Shorten tool/routing instructions and the bundled skill, and stop advertising rejected legacy model overrides in either mode. Preserve trusted defaults, historical results and the explicit-spec SDK.
+- Reject hidden raw request fields before dispatch and validate raw `subagent_wait` arguments before forwarding them to the shared collection handler. Keep resume help consistent with the registered mode.
+- Keep live and archived worktree diff evidence visible when a historical result contains structured output, without changing the original result or its delivery.
+
 ## 0.11.13 — 2026-10-07
 
 ### Cohesive subagent TUI

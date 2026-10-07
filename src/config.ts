@@ -7,6 +7,8 @@ import { isThinkingLevel, type ThinkingLevel } from "./thinking.js";
 
 export type { ThinkingLevel } from "./thinking.js";
 
+const TOOL_MODES = ["compact", "full"] as const;
+export type ToolMode = (typeof TOOL_MODES)[number];
 const WIDGET_MODES = ["background", "off"] as const;
 export type WidgetMode = (typeof WIDGET_MODES)[number];
 const NOTIFICATION_MODES = ["batched", "off"] as const;
@@ -32,6 +34,8 @@ export interface TaskDefaults {
 export type TaskDefaultsByProfile = Partial<Record<TaskProfile, TaskDefaults>>;
 
 export interface SubagentConfig {
+  /** Model-facing surface, captured at extension registration; reload to change. */
+  toolMode: ToolMode;
   maxTasksPerRun: number;
   maxActiveProcesses: number;
   maxQueuedTasks: number;
@@ -90,6 +94,7 @@ export interface SubagentConfig {
 }
 
 export const defaultConfig: SubagentConfig = {
+  toolMode: "compact",
   maxTasksPerRun: 8,
   maxActiveProcesses: 4,
   maxQueuedTasks: 32,
@@ -182,6 +187,7 @@ export function sanitizeConfigOverrides(raw: unknown, source = JEV_ROUTING_CONFI
     }
   }
   return prune<SubagentConfig>({
+    toolMode: oneOf(TOOL_MODES, value.toolMode),
     jevRouting,
     jevRoutingError,
     taskDefaults: sanitizeTaskDefaultsByProfile(value.taskDefaults),

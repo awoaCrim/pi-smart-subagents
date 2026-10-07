@@ -1,167 +1,93 @@
 ---
 name: subagent
-description: Delegate work to isolated child agents with the subagent tool. Jev routes each new dispatch to an execution model while local policy activates the complete permitted tool set; covers explore/review/general profiles, parallel fanout with best-effort synthesis, worktree isolation and the diff/apply/discard loop, background runs, steering, output_schema, context fork, and the Pi-only new-dispatch rule. Use when delegating exploration or implementation, running tasks in parallel, or when a subagent run needs inspecting, steering, or landing.
+description: Delegate exploration, review or implementation to isolated child agents. Use for named agents, parallel or background tasks, budgets, steering and the worktree diff/apply/discard loop. Jev selects the model; local policy controls tools.
 ---
 
 # Subagent
 
-Delegate research, parallel exploration, and clean-context implementation to child
-agents. Prefer `subagent` over long in-thread digressions when the work benefits
-from isolation, parallelism, or a fresh context.
+Delegate independent research, clean-context review or isolated implementation.
+Give each task enough context to stand alone, a short `description`, and the lowest
+honest `difficulty`: simple for bounded checks, moderate for ordinary multi-file
+work, complex for architecture or unknown-root-cause debugging. Prefer a suitable
+named `agent` when available; its persona must fit the task.
 
-## When to use
+## Common calls
 
-- Map a codebase area without bloating the parent context (`profile: "explore"`).
-- Review a diff read-only (`profile: "review"`).
-- Implement behind a worktree and land via apply (`profile: "general"`, `isolation: "worktree"`).
-- Fan out independent questions, optionally with `synthesis` to fold results.
-- Background long work (`async: true`) and collect later with `wait` / `subagent_wait`.
-
-## Core calls
+These examples work in the default compact mode. Omit `model`, `fallback_models`
+and `thinking`; callers cannot select them.
 
 ```ts
-// Omit model and fallback_models. Jev selects the execution model from the
-// user's configured candidate list. Local policy activates the complete tool set
-// permitted for the task. An explicit model/fallback is rejected on new work.
+// Single foreground task; single defaults to general, so select read-only explicitly.
+{ task: "Map parseConfig callers", description: "Map config callers", profile: "explore", difficulty: "simple" }
 
-// Single foreground task (default profile: general)
-{ task: "Find call sites of parseConfig", description: "Map parseConfig" }
+// Parallel workers default to explore.
+{ tasks: [
+  { task: "Review auth validation", description: "Auth validation review", difficulty: "simple" },
+  { task: "Review session expiry", description: "Session expiry review", difficulty: "simple" }
+] }
 
-// Parallel read-only explorers (default profile for tasks[]: explore)
-{
-  tasks: [
-    { task: "Map auth middleware", description: "Auth flow" },
-    { task: "List env vars in server/", description: "Env inventory" }
-  ],
-  synthesis: "Merge into one prioritized brief"
-}
+// Background only when you have independent work to do meanwhile.
+{ task: "Audit dependency licenses", description: "Dependency license audit", profile: "review", difficulty: "moderate", max_turns: 20, async: true }
+{ action: "status", id: "<run-id>" }
+{ action: "wait", id: "<run-id>" }
+// Equivalent dedicated tool: subagent_wait { id: "<run-id>", timeout_ms: 30000 }
+{ action: "steer", id: "<run-id>", message: "Focus on src and wrap up" }
+{ action: "cancel", id: "<run-id>" }
 
-// Background: notified on completion; wait/status still work
-{ task: "Audit dependency licenses", async: true }
-{ action: "status", id: "abc123" }
-{ action: "wait", id: "abc123" }           // interruptible; does not cancel
-{ action: "cancel", id: "abc123" }
-// Same wait semantics as a dedicated tool:
-// subagent_wait { id: "abc123", timeout_ms?: number }
-
-// Worktree loop
-{ task: "Implement feature A", profile: "general", isolation: "worktree" }
-{ action: "diff", id: "abc123", index: 1 }
-{ action: "apply", id: "abc123", index: 1 }
-{ action: "discard", id: "abc123", index: 1 }
-
-// Dry-run validation + resolved plan (no spawn).
-// plan calls Jev and incurs selector fees, then a later dispatch selects again.
-{ action: "plan", tasks: [{ task: "…", isolation: "worktree" }] }
+// Isolated changes; inspect before applying. index selects a parallel worker.
+{ task: "Implement the approved fix", description: "Implement approved fix", profile: "general", difficulty: "moderate", isolation: "worktree" }
+{ action: "diff", id: "<run-id>", index: 0 }
+{ action: "apply", id: "<run-id>", index: 0 }
+{ action: "discard", id: "<run-id>", index: 0 }
 ```
 
-## Profiles
+## Permissions and delivery
 
-| Profile   | Tools                                                     | Writes                                      |
-| --------- | --------------------------------------------------------- | ------------------------------------------- |
-| `explore` | locally permitted read-only tools                         | no project-file writes                      |
-| `review`  | same as explore                                           | no project-file writes                      |
-| `general` | all active locally permitted ordinary tools after explicit-tool policy | yes if the local set includes bash/edit/write |
+- `explore` and `review` reject ordinary write-capable tools. `general` permits
+  locally allowed tools and may write. These profiles and worktrees are not OS
+  sandboxes. `cwd` selects the working directory.
+- Parallel writers need separate worktrees or distinct checkouts. Applying a
+  worktree lands uncommitted changes; inspect the diff first. Discard removes the
+  selected worktree/branch or archived patch, so use it only for unwanted work.
+- Named agents supply persona and trusted defaults, not permission to bypass
+  policy. Jev chooses only the model. Local policy selects the complete permitted
+  ordinary tool set; Pi owns native tool activity. Startup verifies the model
+  and child capabilities, recording unforced omissions and refusing missing
+  explicitly required tools. Unsupported combinations fail closed.
+- Collect with `wait` or `subagent_wait`, rather than polling. Timeout or abort of
+  a wait neither cancels nor consumes the run. Completion notifications do not
+  consume the once-only full result. Use `cancel` to stop work. A failed setup
+  can still have a collectable run ID; do not start duplicate work blindly.
+- `max_turns`, `max_cost` and `timeout_ms` bound work. Timeout includes preflight,
+  routing, setup, queue and execution. Turn/cost stops allow configured grace
+  turns to wrap up. A foreground caller abort cancels its run; `async: true`
+  lets work outlive the initiating call.
+- Jev selection can incur separate fees. `max_cost` is a soft provider-reported
+  execution-cost ceiling, not a cap on selector charges. Routing currency is unreported. A
+  selector failure stops new dispatch; management needs no routing credential.
+  Ranked model failover is limited to recognized settled availability errors
+  before any tool starts; uncertain activity or task-quality failures do not
+  authorize another attempt.
+- Use `/subagents` for the inspector and `/subagent-cost` for the ledger.
 
-Local policy activates the complete ordinary tool set that survives active `direct`
-metadata, profile restrictions and an explicit `tools` ceiling; it is not a Jev per-tool
-selection. `hidden` definitions are excluded. Pi's official `model-only`, `codemode` and
-`deferred` definitions are native managed tools: they are not selector choices, are
-carried automatically, and their child-registration evidence is negotiated while Pi
-controls their activity; an unforced missing definition is recorded as omitted. Direct SDK/custom tools remain ordinary local capabilities; source metadata and
-annotations do not prove safety. Explore/review reject ordinary writers. A local empty
-ordinary/native set produces `--no-tools`, while permitted active tools are not dropped by
-selector choice.
+## Advanced mode and setup
 
-The full finalized candidate allowlist (ordinary direct names plus derived native names)
-is passed to the child as Pi's `--tools` set (`--no-tools` when empty). Pi's official
-exposure semantics control how native names participate; startup negotiates the effective
-intersection from ordinary-active and native-registration evidence. Pi 0.86.0 is the
-verified baseline for built-in, extension and late-registered tool enforcement; an
-unsupported host is refused rather than silently weakened. Before the real task prompt,
-startup verifies the model and nested-tool source, records unforced candidate omissions in
-bounded diagnostics, and fails closed when an explicitly requested tool is missing. Active
-names outside the finalized allowlist, malformed evidence or a source/model/nonce mismatch
-still stops the child before task work.
-Older hosts without exposure metadata use Pi's default `direct` behavior; unknown present
-exposure values are dropped rather than guessed. No user tool-name config is needed.
+Compact keeps ordinary single/parallel/background work, budgets and management.
+Advanced caller controls require `toolMode: "full"` in the existing private
+`~/.pi/subagent.json` and an extension reload/restart. Finish active work before
+reloading. A file edit alone does not switch the current tools. Never silently
+remove a requested hidden option; explain the requirement instead.
 
-Parallel write-capable tasks sharing one checkout are rejected unless each uses
-`isolation: "worktree"`, a distinct `cwd`, or `allow_shared_writes: true`.
+Read [tool modes and advanced usage](../../docs/REFERENCE.md#tool-modes) only when
+needed for resume/fork, synthesis, structured output, output files, explicit tool
+or system-prompt overrides, per-call retry/grace tuning, WIP seeding, background
+process retention, unsafe shared writes or paid `plan`. Full exposes these
+options without enabling them. Trusted named/config defaults, old artifacts and
+the explicit-spec SDK remain available independently of the public mode.
 
-## Runtime
-
-New extension-managed dispatch runs through Pi's RPC child runtime. Jev selects
-an execution model only; local policy activates ordinary locally permitted tools, and the
-extension does not add hidden tools or switch to another child runtime. Unsupported capability
-combinations are **refused**, not silently degraded:
-
-|                          | Pi            |
-| ------------------------ | ------------- |
-| `max_cost`               | yes (provider-reported execution only; not selector currency) |
-| read-only profile        | tool allowlist |
-| steering / grace wrap-up | yes           |
-| `context: "fork"`        | yes           |
-| resolved thinking       | yes (not a request field) |
-| `output_schema`          | yes           |
-
-## Budgets and safety
-
-- Prefer `max_turns`, `max_cost`, and/or `timeout_ms` on long or write-capable runs.
-  `timeout_ms` is absolute: local preflight, Jev selection, setup, queue and
-  runtime all count against it. Real dispatches are registered before the
-  pre-spawn phases, so a deadline there is reported as `timeout (routing)` with
-  the full run id. Use `async: true` when work must outlive the initiating call;
-  a foreground caller abort still cancels its registered run.
-- `output_schema` asks the child for a fenced `json:result` block. An otherwise successful invalid answer gets one repair round; a failed provider attempt neither repairs nor publishes structured output.
-- `context: "fork"` continues from a fork of the parent session.
-- Do not poll `status` in a tight loop. Use `wait` / `subagent_wait`, or let the
-  completion notification arrive for `async: true` runs. If routing or setup
-  fails, the same run id remains collectable; do not start a duplicate request
-  merely because the initiating call stopped waiting.
-- Point the user at `/subagents` for the live inspector and `/subagent-cost` for
-  the root / subagent / routing / combined ledger. Routing cost is reported as
-  unreported (tokens only, no currency).
-
-## Routing
-
-Omit `model` and `fallback_models` on every new call: both are legacy fields,
-and an explicit value is rejected rather than bypassing selection. Jev chooses
-an initial execution model and probabilities for the user's eligible candidates. Local policy
-then resolves the complete ordinary/native tool set from active availability, profile and
-explicit-tool constraints; no tool names or descriptions are sent to Jev and no per-tool
-include/exclude decision is made. Explore/review stay read-only, and management actions
-need no routing config or credential.
-
-A Jev timeout or invalid decision still stops new dispatch; there is no emergency model. A valid route retains every candidate probability and tries higher values first. Tied maxima keep the returned choice first; other ties follow configured order. Low confidence and zero probability are accepted, not thresholds. Per-model probability is a selector preference, not uptime or a separate confidence score.
-
-Recognized settled model-unavailable, temporary rate-limit/service and transport errors can advance to the next candidate only before any tool execution begins in the current invocation. Once a tool starts, or protocol evidence is uncertain, do not restart the child on another or the same model. Auth/configuration, quota/billing, context, invalid requests, task/schema quality, cancellation and exhausted budgets never trigger model switching. Historical resume/fork messages are not new tool execution.
-
-`max_retries` limits all extension-level extra attempts: 0 means one initial attempt; 2 means at most three attempts. The built-in default remains 1. Availability failure advances directly to the next candidate; candidate exhaustion never wraps. Conclusively pre-work infrastructure failures may retry the same model within that budget. Every attempt shares the finalized ordinary/native tool set, absolute deadline and cumulative reported cost/turn budgets, with fresh model/ordinary-active/native-registered startup verification. Switching makes no extra Jev call. Pi's internal provider retries are separate, unchanged and may delay fallback.
-
-Plan/status distinguish original choice, ranked alternatives and actual attempts. Earlier failed output is retained as attributed previews/session pointers, not mixed into a later structured answer. All-failed tasks keep their final failure. Existing runs remain manageable without selector configuration or a credential.
-
-An optional candidate `thinking` value is an opaque Pi thinking-level string;
-common values include `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
-`max`, but model-specific values are passed through unchanged. The public
-`subagent`/`tasks[]` request has no `thinking` field, so model callers cannot
-manually override it. Resolution is agent > profile `taskDefaults.thinking` >
-selected candidate > difficulty default (`simple`→`minimal`, `moderate`→`medium`,
-`complex`→`high`) > parent thinking. Pi may clamp the resolved value; routed
-result metadata reports the host-effective level when available.
-The extension re-reads `jevRouting` on each dispatch and injects non-secret
-routing guidance into the parent prompt. The user stores the TypeSafe credential
-in `jevRouting.apiKey` in the private `~/.pi/subagent.json`; do not read, display
-or copy the key into task text, prompts or output. Optional `jevRouting.baseUrl` is
-the complete SystemOne request URL: omission keeps the exact official
-`https://api.typesafe.ai/v1/systemone` default, with no implicit path rewriting.
-It is canonicalized and must be an absolute HTTPS URL with a hostname, at most
-2048 characters, no username/password, query, fragment, whitespace or control
-characters. A custom endpoint changes the trusted recipient of the minimal routing
-disclosure; the normalized URL stays in the private config snapshot and is not put
-in routing DTOs, prompts, receipts, results or child arguments. `redirect: "error"`
-and header-only Bearer authentication remain enforced. Legacy `apiKeyEnv` is rejected
-with migration guidance; there is no environment fallback. If the config, URL or key
-is missing or invalid, management remains available but new spawns, `/btw`, plan,
-resume, fork and synthesis are rejected. This config-file credential contract ships in
-npm 0.10.0; published npm 0.9.0 uses the old environment mechanism.
+The user configures routing via `jevRouting` in the same private file; see
+[routing setup](../../docs/REFERENCE.md#jev-routing). Never read, print or copy
+its API key into task text, prompts or logs. Only trusted routing endpoints may
+receive task/model information and the credential. Execution-provider auth is
+separate. Do not install, publish or alter user configuration to bypass a failed
+route.

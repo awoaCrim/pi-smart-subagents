@@ -32,7 +32,7 @@
 - `maintenance.ts`: filesystem GC (session files) and abort-race helpers; kept out of persistence.
 - `usage.ts`: provider-reported root/subagent/combined accounting, plus a separate
   once-per-request routing-token category whose currency is reported as unreported.
-- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains the canonical TypeBox validators and derives provider-safe tool-schema projections; `extension.ts` registers those projections while validating calls with the originals. Finalized tools are the complete locally permitted active `direct` set after profile and explicit-tool policy, plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions use bounded child-registration evidence and remain host-controlled for activity; an unforced missing definition is negotiated as omitted. Direct SDK/custom tools are ordinary local capabilities; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking is not a public request field: it resolves from trusted agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
+- `policy.ts` / `schema.ts` / `pi-tools.ts`: discriminated request validation, official Pi tool metadata classification and safe capability profiles. `schema.ts` retains canonical legacy-aware TypeBox validators and derives compact/full request envelopes from shared field definitions, then sanitizes provider metadata. `extension.ts` registers the selected projection and gates raw requests against that same mode before canonical validation and dispatch side effects. Nested user `output_schema` content is not a request envelope and must not have field names filtered. Finalized tools are the complete locally permitted active `direct` set after profile and explicit-tool policy, plus automatically derived official native definitions (`model-only`, `codemode`, `deferred`); `hidden` definitions are excluded and missing exposure defaults to `direct`. Native definitions use bounded child-registration evidence and remain host-controlled for activity; an unforced missing definition is negotiated as omitted. Direct SDK/custom tools are ordinary local capabilities; source metadata and annotations do not prove safety. Profile checks reject ordinary writers in read-only modes. Thinking is not a public request field: it resolves from trusted agent/profile/candidate settings, then a small difficulty default, then parent inheritance; Pi's effective level is optional startup evidence.
 - `routing-types.ts` / `routing-policy.ts` / `jev-router.ts` / `dispatch-routing.ts`:
   the mandatory Jev route. `routing-types.ts` owns the selector DTOs, decision/receipt
   shapes, local resource limits and the exact official default endpoint; `routing-policy.ts`
@@ -50,7 +50,10 @@
   dispatch receives a fresh frozen `jevRouting` snapshot, so a valid `baseUrl` edit affects
   the next dispatch without mutating an existing router invocation. Tool exposure is read
   from the parent Pi metadata snapshot in `extension.ts`; no user tool-name list or source
-  heuristic is loaded from config.
+  heuristic is loaded from config. JSON-only `toolMode` defaults to compact (invalid values
+  also fall back to compact) and is captured once during async extension registration,
+  after depth/spawn-policy early exits. Schema, guidance, raw request gates and resume help
+  share that captured mode; fresh routing reads do not hot-switch it.
 - `structured.ts`: structured-output contract (dependency-free JSON-Schema subset
   validation, fenced json:result extraction, contract/repair prompts) and
   conservative double-encoded-arg repair. The runner gates the child's settle on
@@ -68,7 +71,8 @@
   tool result, so widget display would double-render them.
 - `extension.ts`: wiring only; it snapshots Pi tool metadata/active names once and passes
   the official direct/native projections into policy. Nested children at the depth ceiling do
-  not re-register the tool; only top-level parents run maintenance.
+  not re-register the tool; only top-level parents run maintenance. The async factory may
+  read configuration to select the public mode but starts no processes, timers or maintenance.
 
 Invariants:
 
@@ -144,7 +148,7 @@ Invariants:
     `activeAtOrBelowDepth(depth) < maxGlobalActive - reservedFor(depth)`, holding slots
     back for deeper tiers so a full-width spawn tree cannot deadlock on its own children.
     Slot records without a `depth` field count as depth 0.
-28. `action: "plan"` is a truth oracle: it runs the exact validation, Jev selection and
+28. Full-mode `action: "plan"` is a truth oracle: it runs the exact validation, Jev selection and
     local preflights of a real spawn and returns the resolved plan and its selector usage
     without spawning. It creates no registry entry, and its fee-bearing selection is not
     cached for a later dispatch. A real dispatch creates its registry entry before those
@@ -188,3 +192,13 @@ Invariants:
     staleness) that acquires, renews or reaps nothing. Dispatch still takes the
     authoritative lock atomically at the existing launch point, and forked resumes skip
     the exclusive direct-resume check.
+33. Public `toolMode` is a registration-lifetime surface contract, not an engine feature
+    switch or persisted run property. Compact root/task-item envelopes expose 16/10 fields;
+    full exposes 30/23. Hidden, unknown and legacy raw fields reject before new-run
+    registration, dispatch config/catalog reads, preflight or selection, including mixed
+    batches. Neither mode advertises model/fallback/thinking overrides. Trusted defaults,
+    the explicit-spec SDK, `/btw` and management of old advanced results remain unchanged.
+    Switching requires reload/restart after active work finishes; it may trigger ordinary
+    shutdown cancellation. `subagent_wait` validates its raw closed envelope first, then
+    passes its timeout privately into the same wait/delivery body; no public internal
+    carrier field or second `markDelivered` path is permitted.
