@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.11.15 — 2026-10-08
+
+- Preserve sparse `subagent` and `subagent_wait` arguments on the matching physical OpenAI Responses path by adding a missing `strict: false` tool declaration. Keep genuine mode conflicts, compact/full validation, explicit compatibility/strict values and unrelated tools unchanged.
+- Add offline coverage through the actual Responses serializer and registered request hook, alongside runtime conflict and delivery regressions. Virtual routes and other API/deferred paths remain outside this correction.
+
 ## 0.11.14 — 2026-10-07
 
 - Default to a compact subagent request surface with ordinary delegation, parallel/background tasks, budgets and worktree management. Advanced controls remain available with `toolMode: "full"`; upgrades without an explicit setting use compact. See [tool modes](docs/REFERENCE.md#tool-modes) for reload behavior and compatibility.

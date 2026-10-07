@@ -40,6 +40,7 @@ import { ProcessLockManager, runRecordSessionIds } from "./process-lock.js";
 import { SessionScopedRunRegistry, snapshotFromLiveRun } from "./registry.js";
 import {
   providerSubagentSchema,
+  withSubagentNonStrictTools,
   subagentSurfaceError,
   ProviderSubagentWaitParamsSchema,
   SubagentParamsSchema,
@@ -761,6 +762,8 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
 
   // Registration owns the surface. Later reads refresh routing, never this mode.
   const toolMode = loadConfig(await readConfigFile()).toolMode;
+
+  pi.on("before_provider_request", (event, ctx) => withSubagentNonStrictTools(event.payload, ctx.model));
 
   function ownsRouting(runtime: SessionRuntime, generation: number): boolean {
     return current === runtime && !runtime.closed && runtime.routingGeneration === generation

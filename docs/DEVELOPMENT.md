@@ -84,7 +84,9 @@ field gating before dispatch, registration snapshots, trusted defaults, historic
 result management, wait-alias validation and once-only delivery. Full-only plan
 coverage uses explicit full configuration. Payload-size checks use fixed synthetic
 catalogs and routing data; UTF-8 bytes are not token, latency or memory measurements.
-This is not a semantic typecheck or an interactive terminal smoke test.
+The Responses scenarios also run the installed Pi AI serializer with synthetic tools, a fake credential and an intentional pre-HTTP capture. They check the registered request hook, missing-versus-explicit `strict: false`, copy-on-change/immutability, compatibility no-ops and genuine mode conflicts. Fetch is denied and network attempts must remain zero. This boundary coverage catches declaration defects that calling `execute()` alone cannot expose.
+
+This is not a semantic typecheck, live-provider generation test or interactive terminal smoke test. The focused serializer fixture was verified against Pi 1.0.0; report a different installed host's result separately rather than assuming its serializer has the same compatibility defaults.
 
 #### Tool-surface size fixture
 

@@ -148,6 +148,18 @@ export async function surfaceScenarios(options) {
       for (const params of [{id:'missing',unknown:1},{id:'missing',__waitTimeoutMs:3},...['1',NaN,Infinity,0,-1,86400001,null].map(timeout_ms=>({id:'missing',timeout_ms})),{},null]) {
         await rejected(params,/Invalid wait parameters/,'raw alias '+JSON.stringify(params),true);
       }
+      // The observed filled envelope must keep failing; never clean siblings to make it dispatch.
+      for(const params of [{action:'status',task:'Inspect',tasks:[{task:'Inspect'}],async:false},
+        {action:'status',task:'Inspect'},{action:'status',tasks:[{task:'Inspect'}]},
+        {task:'Inspect',tasks:[{task:'Inspect'}]},{action:'status',async:false},
+        ...(mode==='full'?[{action:'plan'},{action:'plan',task:'Inspect',tasks:[{task:'Inspect'}]}]:[])]) {
+        const before=counts(state),raw=JSON.stringify(params);let error;
+        try {await call(params);}catch(e){error=e;}
+        ok(/exactly one|requires task|async cannot/.test(error?.message??''),`${mode}: genuine conflicting modes reject`);
+        for(const counter of ['registryStarts','preflights','routes','children','lookups','deliveryClaims'])
+          eq(state[counter],before[counter],`${mode}: conflict zero ${counter}`);
+        eq(JSON.stringify(params),raw,`${mode}: conflicting input never normalized`);
+      }
       const waitParams={id:'missing',__waitTimeoutMs:3};
       await rejected(waitParams,/Invalid wait parameters/,'spoof alias unchanged',true);
       eq(waitParams.__waitTimeoutMs,3,`${mode}: invalid public input never mutated`);
@@ -235,6 +247,14 @@ export async function surfaceScenarios(options) {
       state.tools=[];
       // Timeout and abort are non-consuming; one native-usage delivery for both entrypoints.
       const background=await launch(); const pending=state.pending[0];
+      const foreignCtx={...ctx,sessionManager:{...ctx.sessionManager,getSessionFile:()=>path.join(temp,'foreign-parent.jsonl'),getSessionId:()=> 'foreign-parent'}};
+      for(const [name,params] of [['subagent',{action:'status',id:background.id}],['subagent_wait',{id:background.id}]]){
+        const before=counts(state);let error;
+        try{await tools.get(name).execute('foreign',params,undefined,undefined,foreignCtx);}catch(e){error=e;}
+        ok(error?.message.includes('not initialized for this session'),`${mode}: ${name} rejects foreign session before lookup`);
+        eqJson(counts(state),before,`${mode}: foreign session has no lookup/delivery/dispatch effect`);
+      }
+      eq(pending.options.signal.aborted,false,`${mode}: foreign session cannot cancel child`);
       const timeout=await tools.get('subagent_wait').execute('wait',{id:background.id,timeout_ms:2},undefined,undefined,ctx);
       ok(text(timeout).includes('NOT cancelled'),`${mode}: bounded alias returns non-cancelling receipt`);
       const abort=new AbortController();abort.abort();

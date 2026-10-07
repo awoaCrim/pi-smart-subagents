@@ -134,6 +134,36 @@ export const SubagentWaitParamsSchema = Type.Object({
 export const ProviderSubagentWaitParamsSchema = sanitizeProviderSchema(SubagentWaitParamsSchema);
 export type SubagentWaitParams = Static<typeof SubagentWaitParamsSchema>;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/** Preserve sparse optional envelopes on the confirmed physical Responses lane.
+ * Pi can omit strict:false; Responses may then normalize optional fields as required.
+ * The public hook exposes only the selected model, so never guess a virtual route.
+ * This is a declaration correction, not input repair or a change to local validators.
+ */
+export function withSubagentNonStrictTools(payload: unknown, model: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(model) || model.api !== "openai-responses" || typeof model.id !== "string" || !model.id) return;
+  if (model.compat !== undefined && !isRecord(model.compat)) return;
+  const strictSupport = isRecord(model.compat) ? model.compat.supportsStrictMode : undefined;
+  if (strictSupport !== undefined && strictSupport !== true) return; // Respect explicit unsupported/malformed compatibility.
+  if (!isRecord(payload) || payload.model !== model.id || !Array.isArray(payload.input) || !Array.isArray(payload.tools)) return;
+
+  let changed = false;
+  const tools = payload.tools.map((tool) => {
+    if (!isRecord(tool) || tool.type !== "function" || (tool.name !== "subagent" && tool.name !== "subagent_wait")
+      || Object.hasOwn(tool, "strict") || Object.hasOwn(tool, "defer_loading")) return tool;
+    const schema = tool.parameters;
+    if (!isRecord(schema) || schema.type !== "object" || schema.additionalProperties !== false || !isRecord(schema.properties)) return tool;
+    const properties = schema.properties;
+    if (tool.name === "subagent" ? !Object.hasOwn(properties, "action") || !Object.hasOwn(properties, "task") || !Object.hasOwn(properties, "tasks")
+      : !Object.hasOwn(properties, "id") || !Object.hasOwn(properties, "timeout_ms")) return tool;
+    changed = true;
+    return { ...tool, strict: false };
+  });
+  return changed ? { ...payload, tools } : undefined;
+}
+
 export function assertObjectToolSchema(schema: unknown): asserts schema is { type: "object" } {
   if (!schema || typeof schema !== "object" || (schema as { type?: unknown }).type !== "object") {
     const type = schema && typeof schema === "object" ? (schema as { type?: unknown }).type : typeof schema;

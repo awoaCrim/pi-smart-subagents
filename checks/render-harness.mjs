@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { extensionScenarios } from './extension-scenarios.mjs';
 import { surfaceScenarios } from './surface-scenarios.mjs';
+import { responsesScenarios } from './responses-scenarios.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -574,6 +575,9 @@ try {
 
   section('compact/full surface, raw gates and registration lifecycle');
   await surfaceScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson });
+
+  section('actual Responses serialization and sparse declaration boundary');
+  await responsesScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson });
 
   // -------------------------------------------------------------------------
   section("single-run render regression fixtures");

@@ -38,6 +38,14 @@ A `tasks[]` item contains `task` plus the shared task fields for its mode. `suba
 
 Trusted named-agent and profile/config defaults still apply, including advanced defaults such as structured contracts or retry budgets. Existing results, session/artifact pointers and WIP worktrees remain collectable/manageable under compact. Resume requires full mode; compact status and inspector help explain this without preparing an unavailable call. The explicit-spec SDK and human `/btw` command keep their existing behavior.
 
+### Sparse request arguments
+
+Pass only fields needed for the chosen operation: management uses `action`/`id`, single work uses `task`, and parallel work uses `tasks`. Do not fill irrelevant optional fields with placeholders. Genuine combinations remain errors; full-mode `action: "plan"` is the exception and requires exactly one of `task` or `tasks`.
+
+For a selected physical `openai-responses` model matching the outgoing request, the extension adds a missing `strict: false` declaration to its two direct tools. Without that flag, Responses can normalize optional properties into required fields and cause a status call to include conflicting task placeholders. The correction preserves schemas and local validation in both tool modes; it does not clean incoming arguments.
+
+Existing `strict` values and an explicit `supportsStrictMode: false` compatibility setting are respected. Other APIs, virtual selections, mismatched model metadata and deferred/historical declarations are unchanged. The public Pi request hook does not identify a virtual route's physical model, so those paths are not guessed or advertised as repaired.
+
 ### Quick usage
 
 These are request objects for the `subagent` tool, not shell commands. Examples work in compact unless marked full. New work calls Jev; omit `model` and `fallback_models`.
