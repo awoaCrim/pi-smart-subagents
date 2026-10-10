@@ -36,6 +36,8 @@ Jev 选择模型，不逐个选择工具。本地策略控制允许的工具集�
 
 任务的 `timeout_ms` 是提醒阈值，不再是停止期限。达到阈值时，前台调用返回 run ID，同一任务继续在后台执行。通过 `status`、`wait`、`steer` 或 `cancel` 决定下一步。已有时间设置也改为此提醒语义；轮数、费用预算和独立故障检查仍保留。详见[预算与重试说明](docs/REFERENCE.md#budgets-and-retries)。
 
+本包启动的每个子代理都会自动收到一条包内置的强制规则：不得运行测试或测试命令，也不得创建或修改测试代码。子代理只做实现和静态审查，并如实说明未测试的部分；可执行的测试工作只归顶层主代理（TOP-LEVEL main agent），任何子代理都不拥有测试权，中间层委派代理同样是子代理。日志和备份在既有任务范围与工具权限内仍然允许。这是提示词层面的指令，不是沙箱；它只对更新后的包代码加载之后新启动的子代理生效，不追溯已运行的子代理，也不覆盖独立启动或自定义后端的进程。详见[委派测试边界](docs/REFERENCE.md#delegated-testing-boundary)。
+
 - 使用 `/subagents` 查看和管理任务。
 - 使用 `/subagent-cost` 查看用量。
 - 命名代理、并行任务、后台执行、工作树和结构化结果见[使用参考](docs/REFERENCE.md#quick-usage)，键盘操作见 [TUI 指南](docs/UX.md)。
@@ -49,6 +51,6 @@ Jev 选择模型，不逐个选择工具。本地策略控制允许的工具集�
 
 [MIT](LICENSE)。Copyright (c) 2026 Luke Parke。社区分支由 cr1ms0n（awoaCrim）维护。重新分发时请保留原始版权声明和许可证。
 
-译自 [README.md](README.md)，英文文件 blob：`73cfc81e3643bd5750e7142cc5c32564fcc47d16`。中英文内容如有差异，以英文为准。
+译自 [README.md](README.md)，英文文件 blob：`97e634bacead6d52b79a0a40a3f7f6129de9097c`。中英文内容如有差异，以英文为准。
 
 感谢 [Linux.do](https://linux.do/)。

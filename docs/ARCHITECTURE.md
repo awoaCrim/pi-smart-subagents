@@ -54,6 +54,7 @@
   also fall back to compact) and is captured once during async extension registration,
   after depth/spawn-policy early exits. Schema, guidance, raw request gates and resume help
   share that captured mode; fresh routing reads do not hot-switch it.
+- `backends/pi.ts`: the Pi RPC child adapter. It builds argv/env, negotiates native/forced capability evidence, writes the package-owned temporary system prompt (mode `0o600`, cleaned by the runner) and composes the appended prompt as persona/caller text, one unconditional private mandatory no-testing instruction, then the existing structured-output contract last. The mandatory rule is a prompt-level instruction for delegated children: tests and test-code changes belong to the top-level main agent (the human-facing session that started the work), never to a delegated child at any depth, while implementation, static review and permitted logs/backups stay available. It grants no permission, removes no caller text and is not an OS/capability sandbox.
 - `structured.ts`: structured-output contract (dependency-free JSON-Schema subset
   validation, fenced json:result extraction, contract/repair prompts) and
   conservative double-encoded-arg repair. The runner gates the child's settle on

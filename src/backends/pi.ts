@@ -36,6 +36,21 @@ const PI_CAPABILITIES: BackendCapabilities = {
   outputSchema: true,
 };
 
+/**
+ * Package-owned mandatory child instruction. It is always appended to the Pi
+ * child's system prompt, after any persona/caller text and before the
+ * structured-output contract, so no caller field can remove it. This is
+ * guaranteed instruction inclusion, not an OS sandbox, a tool/permission
+ * restriction or a model-obedience guarantee; automatic startup capability
+ * checks and runtime state are unaffected.
+ */
+const NO_TESTING_INSTRUCTION = [
+  "MANDATORY PACKAGE RULE: NO TESTING BY SUBAGENTS",
+  "Test work belongs to the top-level main agent, not to you. Do not run existing test suites or test commands, and do not run ad-hoc smoke, reproduction, assertion or other behavior-testing execution. Do not create, write or modify temporary or permanent test code, scripts, fixtures or harnesses. Do not evade this through inline or in-memory execution, temporary directories, indirect shell wrappers or delegation to another subagent, and do not relabel tests as checks or verification.",
+  "You may implement production, source and documentation changes and perform static review of source, diffs and existing tests without executing or changing them. If a task or persona asks you to test, explain that the top-level main agent owns it and state honestly which work remains untested; never claim or fabricate passing test results.",
+  "Logs and backups are allowed only within your existing task scope and tool permissions and normal credential, privacy and safety rules; they are neither required nor automatically created. Do not interfere with package-owned automatic startup capability checks, sessions, locks, worktrees or result state; that runtime machinery is not testing under this rule.",
+].join("\n");
+
 export class PiBackend implements BackendAdapter {
   readonly name = "pi" as const;
   readonly capabilities = PI_CAPABILITIES;
@@ -107,8 +122,14 @@ export class PiBackend implements BackendAdapter {
       if (toolList.length === 0) args.push("--no-tools");
       else args.push("--tools", toolList.join(","));
     }
-    // Persona/system prompt first, structured-output contract last (highest salience).
-    const appendPrompt = [spec.systemPrompt?.trim(), spec.outputSchema ? schemaContract(spec.outputSchema) : undefined]
+    // Persona/system prompt first, the mandatory package rule next, the
+    // structured-output contract last (highest salience). The mandatory rule is
+    // unconditional, so anonymous launches without persona or schema still get it.
+    const appendPrompt = [
+      spec.systemPrompt?.trim(),
+      NO_TESTING_INSTRUCTION,
+      spec.outputSchema ? schemaContract(spec.outputSchema) : undefined,
+    ]
       .filter(Boolean)
       .join("\n\n");
     const cleanupDirs: string[] = [];

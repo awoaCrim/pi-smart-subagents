@@ -35,6 +35,10 @@ The product skill at [skills/subagent/SKILL.md](../skills/subagent/SKILL.md) is 
 
 Keep engine rules in their owning modules. The extension is a composition root, and renderers consume narrow projections rather than owning a second run store. The architecture document covers the remaining modules and invariants.
 
+### Who runs tests
+
+Every Pi child launched through this package always receives one package-owned mandatory no-testing instruction in its appended system prompt, composed after any persona/caller text and before the structured-output contract; no request field removes it. Delegated children implement changes and review statically. Executable verification belongs only to the TOP-LEVEL main agent: an intermediate delegating child is still a child and never owns tests, so a nested `subagent` caller does not receive test authority from its position in the tree. The instruction limits neither the operating system nor tool permissions, and it applies only to launches made after the updated package code is loaded.
+
 ---
 
 ### Checks available in this checkout
@@ -176,6 +180,8 @@ A dry run verifies packaging, not application behavior. For an actual release, f
 ### Behavior verification
 
 For engine changes, trace the affected architecture invariants and exercise the owned boundary with an injected transport, fake process or isolated host when such a harness is available. State what was exercised and keep paid partial output/accounting semantics intact.
+
+Executable verification is the responsibility of the TOP-LEVEL main agent (the human-facing session that started the work), never of a delegated child. This holds for the whole tree: a child that delegates further is still a child, and a nested `subagent` parent is not the top level, so it must not run or own tests either. A subagent launched through this package is instructed not to run tests or author/modify test code, so a child result is implementation plus static review; it reports untested work rather than a run suite. Before you rely on that instruction, check that the parent process actually loaded the updated adapter: reload or restart Pi after changing package code, and remember that a context switch alone is not a reload. Independently launched processes and custom backends are outside the package's launch boundary.
 
 A real `subagent` call and `action: "plan"` both invoke Jev and may incur charges. A plan avoids spawning a child; it is not an offline test. Obtain explicit permission before live routing/provider smoke tests, use synthetic task data and keep real user sessions out of fixtures.
 

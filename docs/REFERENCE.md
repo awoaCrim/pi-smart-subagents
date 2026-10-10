@@ -281,6 +281,18 @@ ignored.
 
 ---
 
+### Delegated testing boundary
+
+Every Pi child launched through this package receives one package-owned mandatory instruction in its appended system prompt, after any persona or caller text and before the structured-output contract. No request field, config value or persona can remove it; anonymous tasks without a persona or schema receive it too.
+
+The instruction tells the child not to run existing test suites or test commands, not to run ad-hoc smoke/reproduction/assertion execution, and not to create, write or modify temporary or permanent test code, scripts, fixtures or harnesses. It also forbids evading the rule through inline/in-memory execution, temporary directories, indirect shell wrappers or delegation to another subagent, and relabelling tests as checks. Children may implement production, source and documentation changes, and may statically review source, diffs and existing tests without executing or changing them. When a task or persona asks for tests, the child reports that executable verification belongs only to the TOP-LEVEL main agent, which means the human-facing session that started the work, not an intermediate delegating child: a nested `subagent` parent is still a child and owns no tests. The child states honestly what remains untested rather than claiming results.
+
+Logs and backups stay permitted inside the existing task scope, profile/tool capabilities and normal credential/privacy rules. They are neither required nor automatically created, and this instruction grants no new tool permissions; a read-only child still has no write tools. Package-owned automatic startup capability checks, sessions, locks, worktrees and explicit `output` files are runtime machinery, not delegated testing, and remain unchanged; those `output` files are written by the orchestrator on the dispatching side from the delivered result rather than by the worker.
+
+This is instruction inclusion, not enforcement: it cannot prevent a noncompliant model, tool or extension from running tests, and it is not a sandbox or permission change. It applies to launches that happen after the updated package code is loaded by the parent process. Already-running children and processes started independently of this package (for example a directly invoked `pi`, or a custom backend adapter) are outside the guarantee. Reload or restart Pi so new dispatches use the updated adapter; a context switch alone does not do that.
+
+---
+
 ### Profiles
 
 | Profile                      | Tools                                                   | Writes                                      |

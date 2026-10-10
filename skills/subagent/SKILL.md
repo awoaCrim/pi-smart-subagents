@@ -75,6 +75,18 @@ and `thinking`; callers cannot select them.
   Ranked model failover is limited to recognized settled availability errors
   before any tool starts; uncertain activity or task-quality failures do not
   authorize another attempt.
+- Every Pi child launched through this package receives one mandatory
+  package-owned rule appended after persona/caller text: do not run tests or
+  test commands or ad-hoc smoke/reproduction checks, and do not create or modify
+  test code, scripts, fixtures or harnesses, directly or via another child. No
+  request field removes it. You may implement source/doc changes and review
+  source, diffs and existing tests statically; executable testing belongs only to
+  the TOP-LEVEL main agent, never to a delegated child, so a child that delegates
+  further still owns no tests. Report what stays untested instead of claiming
+  results. Logs and backups stay allowed within your existing scope, permissions
+  and privacy rules. This is instruction-only, not a sandbox; it covers launches
+  after the updated package code is loaded, not running or independently
+  launched processes.
 - Use `/subagents` for the inspector and `/subagent-cost` for the ledger.
 
 ## Advanced mode and setup

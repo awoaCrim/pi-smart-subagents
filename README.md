@@ -36,6 +36,8 @@ See [tool modes](docs/REFERENCE.md#tool-modes) for the field split and upgrade b
 
 Task `timeout_ms` is a reminder, not a stop limit. At the threshold, a foreground call returns the run ID and the same work continues in the background. Use `status`, `wait`, `steer` or `cancel` to decide what happens next. Existing time settings now have this advisory meaning; turn/cost budgets and independent fault checks remain. See [budgets and retries](docs/REFERENCE.md#budgets-and-retries).
 
+Every child launched by this package automatically receives a package-owned mandatory rule: it must not run tests or test commands, and it must not create or modify test code. Delegated children implement changes and review statically and report untested work; executable testing belongs only to the TOP-LEVEL main agent, never to a delegated child, so an intermediate delegating child owns no tests either. Logs and backups remain allowed within the existing task scope and tool permissions. This is a prompt-level instruction, not a sandbox, and it applies to new launches after the updated package is loaded, not to already-running children or independently launched/custom-backend processes. See [delegated testing](docs/REFERENCE.md#delegated-testing-boundary).
+
 - Open `/subagents` to inspect and manage tasks.
 - Open `/subagent-cost` to view usage.
 - See the [usage reference](docs/REFERENCE.md#quick-usage) for named agents, parallel tasks, background work, worktrees and structured results, or the [TUI guide](docs/UX.md) for keyboard controls.

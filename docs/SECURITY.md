@@ -103,8 +103,20 @@ and prefer read-only profiles when exploring third-party trees.
 
 ## Output artifacts
 
-`output` files are written by the child. Resolve paths carefully and reject
+`output` files are written by the orchestrator from the delivered result, not
+by the worker process that produced it (for extension-managed runs, the parent
+process on the dispatching side writes them). Resolve paths carefully and reject
 duplicate output paths across parallel workers.
+
+## Delegated testing boundary
+
+Every Pi child launched through this package is always given the same package-owned mandatory instruction in its appended system prompt, composed after any persona/caller text and before the structured-output contract; no supported request field, config value or persona removes it, and an anonymous task receives it too.
+
+The instruction forbids running tests or test commands, ad-hoc smoke/reproduction/assertion execution, creating or modifying temporary or permanent test code/scripts/fixtures/harnesses, and evading the rule through inline or in-memory execution, temporary directories, indirect shell wrappers or delegation to another subagent. Children may implement production/source/documentation changes and statically review source, diffs and existing tests. Executable testing belongs only to the TOP-LEVEL main agent, never to a delegated child: a child that delegates further is still a child, so an intermediate `subagent` parent owns no tests. When a task asks a child to test, the child reports that and states what remains untested instead of claiming results.
+
+Logs and backups remain allowed within the existing task scope, capability profile and normal credential/privacy rules; the instruction neither requires nor creates them and grants no tool or permission. Package-owned automatic startup capability checks, sessions, locks, worktrees and parent-written result files are unaffected runtime mechanics, not delegated testing.
+
+This is instruction inclusion only. It does not constrain the operating system, does not disable `bash`, native or custom tools, and cannot prevent a noncompliant model or extension from executing tests; profiles and worktrees remain the existing non-sandbox tool-selection policy. It reaches launches made after the updated package code is loaded. Already-running children and independently launched or custom-backend processes are outside it. Reload or restart Pi before relying on it for new dispatches.
 
 ## Named agent files
 

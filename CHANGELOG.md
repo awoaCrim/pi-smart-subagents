@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.1 — 2026-10-10
+
+- **Delegated children are instructed not to test.** Every Pi child launched through this package now always receives one package-owned mandatory instruction in its appended system prompt, composed after any persona/caller text and before the structured-output contract. No request field, config value or persona removes it, and an anonymous task receives it too. It forbids running existing suites or test commands, ad-hoc smoke/reproduction/assertion execution, and creating or modifying temporary or permanent test code, scripts, fixtures or harnesses, including inline/in-memory execution, indirect wrappers or delegation to another child.
+- Children still implement production/source/documentation changes and review statically, including reading existing tests without executing or changing them. Executable verification belongs only to the TOP-LEVEL main agent, never to a delegated child; a child that delegates further is still a child, so a nested `subagent` parent owns no tests. A child asked to test reports the limitation and what remains untested instead of claiming results.
+- Logs and backups remain allowed within the existing task scope, tool capabilities and normal credential/privacy rules, with no forced creation or cleanup. Tool schemas, profiles, permissions, budgets, sessions/locks/worktrees, startup capability checks and explicit `output` files are unchanged; `output` files are written by the dispatching orchestrator from the delivered result.
+- This is instruction inclusion, not enforcement or a sandbox: it does not prevent a noncompliant model/extension from testing and does not restrict `bash`, native or custom tools. It reaches launches that happen after the updated package code is loaded by the parent process; already-running children and independently launched/custom-backend processes are excluded. Reload or restart Pi after updating to use it for new dispatches.
+
 ## 0.12.0 — 2026-10-10
 
 - **Breaking tool contract:** task `timeout_ms`, including inherited agent/profile/default values, is now an elapsed reminder and foreground handoff threshold, not a hard runtime limit. The same run continues under its full ID until it finishes, faults or is explicitly cancelled.
