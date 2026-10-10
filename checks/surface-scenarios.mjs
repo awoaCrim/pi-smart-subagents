@@ -17,10 +17,11 @@ export async function surfaceScenarios(options) {
   await require('esbuild').build({stdin:{contents:`import * as S from ${JSON.stringify(path.join(SRC,'src/schema.ts'))};
     import * as C from ${JSON.stringify(path.join(SRC,'src/config.ts'))};
     import * as R from ${JSON.stringify(path.join(SRC,'src/routing-policy.ts'))};
-    import { Value } from 'typebox/value'; export { S,C,R,Value };`,resolveDir:path.join(PI_ROOT,'node_modules'),loader:'ts'},
+    import { Semaphore } from ${JSON.stringify(path.join(SRC,'src/semaphore.ts'))};
+    import { Value } from 'typebox/value'; export { S,C,R,Value,Semaphore };`,resolveDir:path.join(PI_ROOT,'node_modules'),loader:'ts'},
     outfile,bundle:true,platform:'node',format:'esm',target:'node22',nodePaths:[path.join(PI_ROOT,'node_modules')],
     alias:{'@earendil-works/pi-tui':path.dirname(path.dirname(require.resolve('@earendil-works/pi-tui')))}});
-  const {S,C,R,Value}=await import(pathToFileURL(outfile).href);
+  const {S,C,R,Value,Semaphore}=await import(pathToFileURL(outfile).href);
   const canonicalBefore=JSON.stringify(S.SubagentParamsSchema);
   for (const [mode,roots,items] of [['compact',16,10],['full',30,23]]) {
     const canonical=S.subagentSurfaceSchema(mode), schema=S.providerSubagentSchema(mode);
@@ -40,8 +41,12 @@ export async function surfaceScenarios(options) {
     ok(Value.Check(canonical,{task:'x'}),`${mode}: canonical compact input accepted`);
     ok(!Value.Check(canonical,{tasks:[{task:'x',unknown:true}]}),`${mode}: nested unknown rejected`);
     ok(!Value.Check(canonical,{task:'x',unknown:true}),`${mode}: root unknown rejected`);
-    ok(!Value.Check(canonical,{tasks:[]}) && !Value.Check(canonical,{tasks:Array(9).fill({task:'x'})}),`${mode}: parallel size limits retained`);
+    eq(schema.properties.tasks.maxItems,10,`${mode}: advertised batch cap is ten`);
+    ok(Value.Check(canonical,{tasks:Array.from({length:10},(_,i)=>({task:`worker ${i}`}))}),`${mode}: ten-task batch accepted`);
+    ok(!Value.Check(canonical,{tasks:[]}) && !Value.Check(canonical,{tasks:Array(11).fill({task:'x'})}),`${mode}: empty and eleven-task batches rejected`);
   }
+  ok(Value.Check(S.SubagentParamsSchema,{tasks:Array(10).fill({task:'x'})}),'canonical schema accepts ten-task batch');
+  ok(!Value.Check(S.SubagentParamsSchema,{tasks:Array(11).fill({task:'x'})}),'canonical schema rejects eleven-task batch');
   eqJson(Object.keys(S.SubagentParamsSchema.properties).length,32,'legacy-aware canonical root retained');
   eq(Object.keys(S.ParallelTaskItem.properties).length,25,'legacy-aware canonical item retained');
   eq(JSON.stringify(S.SubagentParamsSchema),canonicalBefore,'surface construction never mutates canonical schema');
@@ -56,6 +61,66 @@ export async function surfaceScenarios(options) {
     eq(C.loadConfig(C.sanitizeConfigOverrides({toolMode:mode}),{}).toolMode,mode==='full'?'full':'compact',`sanitizer mode ${JSON.stringify(mode)}`);
   }
   eq(C.loadConfig({}, {PI_SUBAGENT_TOOL_MODE:'full'}).toolMode,'compact','no environment mode override');
+  const capacity=C.loadConfig({},{});
+  eqJson([capacity.maxTasksPerRun,capacity.maxActiveProcesses],[10,10],'default batch and concurrency both ten');
+  eqJson([capacity.maxQueuedTasks,capacity.maxGlobalActive,capacity.maxDepth],[32,16,2],'queue/global/depth safeguards unchanged');
+  const fileCapacity=C.sanitizeConfigOverrides({maxTasksPerRun:5,maxActiveProcesses:3});
+  const fileResolved=C.loadConfig(fileCapacity,{});
+  eqJson([fileResolved.maxTasksPerRun,fileResolved.maxActiveProcesses],[5,3],'explicit lower file capacity retained');
+  const envResolved=C.loadConfig(fileCapacity,{PI_SUBAGENT_MAX_TASKS:'8',PI_SUBAGENT_MAX_ACTIVE:'6'});
+  eqJson([envResolved.maxTasksPerRun,envResolved.maxActiveProcesses],[8,6],'environment capacity still wins over file');
+  const higherCapacity=C.sanitizeConfigOverrides({maxActiveProcesses:12});
+  eqJson([C.loadConfig(higherCapacity,{}).maxActiveProcesses,C.loadConfig(higherCapacity,{PI_SUBAGENT_MAX_ACTIVE:'14'}).maxActiveProcesses],
+    [12,14],'explicit concurrency above ten is not clamped and environment still wins');
+  const invalidCapacity=C.loadConfig(C.sanitizeConfigOverrides({maxTasksPerRun:0,maxActiveProcesses:'bad'}),{PI_SUBAGENT_MAX_TASKS:'bad',PI_SUBAGENT_MAX_ACTIVE:'0'});
+  eqJson([invalidCapacity.maxTasksPerRun,invalidCapacity.maxActiveProcesses],[10,10],'invalid capacity values retain ten defaults');
+
+  const semaphore=new Semaphore(capacity.maxActiveProcesses,capacity.maxQueuedTasks);
+  await Promise.all(Array.from({length:10},()=>semaphore.acquire()));
+  eqJson(semaphore.getStats(),{active:10,queued:0,maxActive:10,maxQueued:32},'real semaphore grants ten slots without a release');
+  let extraGranted=false;
+  const extra=semaphore.acquire().then(()=>{extraGranted=true;});
+  eqJson([extraGranted,semaphore.getStats().queued],[false,1],'eleventh slot waits instead of exceeding concurrency');
+  const cancelled=new AbortController();
+  const aborted=semaphore.acquire(cancelled.signal).then(()=>undefined,error=>error);
+  eq(semaphore.getStats().queued,2,'another capacity waiter joins FIFO queue');
+  cancelled.abort();
+  ok((await aborted)?.message.includes('aborted before spawn'),'queued capacity waiter aborts without a grant');
+  eq(semaphore.getStats().queued,1,'abort removes only its queued capacity waiter');
+  semaphore.release(); await extra;
+  eqJson([extraGranted,semaphore.getStats().active,semaphore.getStats().queued],[true,10,0],'release admits eleventh while keeping ten active');
+  for(let i=0;i<10;i++)semaphore.release();
+  eq(semaphore.getStats().active,0,'capacity fixture releases every granted slot');
+
+  // Real extension wiring and request preparation, not ten live provider children.
+  const capacityEnv=['PI_SUBAGENT_MAX_TASKS','PI_SUBAGENT_MAX_ACTIVE'];
+  const savedCapacityEnv=capacityEnv.map(name=>process.env[name]);
+  for(const name of capacityEnv)delete process.env[name];
+  try {
+    for(const mode of ['compact','full']) {
+      const fixture=await extensionFixture({...options,toolMode:mode});
+      try {
+        await fixture.start('tui',{notifications:'off',widget:'off'});
+        eq(fixture.state.runtime.semaphore.getStats().maxActive,10,`${mode}: extension wires default ten-process capacity`);
+        const tasks=Array.from({length:10},(_,i)=>({task:`Offline capacity worker ${i}`}));
+        const accepted=await fixture.call({tasks,async:true});
+        eq(fixture.state.pending[0].specs.length,10,`${mode}: actual extension dispatch accepts all ten workers`);
+        await fixture.settle(); await fixture.call({action:'wait',id:accepted.details.id});
+        const before=counts(fixture.state);
+        const tooMany=await fixture.call({tasks:[...tasks,{task:'eleventh'}]}).then(()=>undefined,error=>error);
+        ok(tooMany?.message.includes('Invalid parameters'),`${mode}: actual extension rejects eleven-task batch`);
+        eqJson(counts(fixture.state),before,`${mode}: oversized raw batch has no dispatch/lookup/delivery effects`);
+        await fixture.start('tui',{notifications:'off',widget:'off',maxTasksPerRun:8,maxActiveProcesses:3});
+        eq(fixture.state.runtime.semaphore.getStats().maxActive,3,`${mode}: explicit lower concurrency reaches extension`);
+        const starts=fixture.state.registryStarts,routes=fixture.state.routes,children=fixture.state.children;
+        const lowerLimit=await fixture.call({tasks}).then(()=>undefined,error=>error);
+        ok(lowerLimit?.message.includes('Expected 1..8 tasks'),`${mode}: configured lower batch limit still enforced`);
+        eqJson([fixture.state.registryStarts,fixture.state.routes,fixture.state.children],[starts,routes,children],`${mode}: lower batch refusal registers/selects/launches nothing`);
+      } finally {await fixture.close();}
+    }
+  } finally {
+    capacityEnv.forEach((name,i)=>{if(savedCapacityEnv[i]===undefined)delete process.env[name];else process.env[name]=savedCapacityEnv[i];});
+  }
   const fakeRouting=C.sanitizeConfigOverrides({jevRouting:{apiKey:'offline-only',selectorModel:'fixture',models:[{model:'offline/model',description:'synthetic',thinking:'high'}]}}).jevRouting;
   for (const mode of ['compact','full']) {
     const guidance=R.formatJevRoutingPrompt(fakeRouting,undefined,mode);

@@ -35,7 +35,7 @@ export const TaskFields = {
   profile: Type.Optional({ ...Profile, description: "explore/review restrict ordinary writes; general may write. Not an OS sandbox." }),
   difficulty: Type.Optional({ ...Difficulty, description: "Lowest truthful scope: simple (bounded check), moderate (multi-file work), complex (architecture/debugging)." }),
   cwd: Type.Optional(Type.String({ description: "Child working directory." })),
-  timeout_ms: Type.Optional(Type.Number({ minimum: 1, maximum: 24 * 60 * 60_000, description: "Total milliseconds, including preflight, routing, queue and retries." })),
+  timeout_ms: Type.Optional(Type.Number({ minimum: 1, maximum: 24 * 60 * 60_000, description: "Elapsed reminder/handoff threshold, including preflight, routing, queue, retries and synthesis; does not stop work. Parallel uses the shortest item threshold." })),
   max_turns: Type.Optional(Type.Number({ minimum: 1, maximum: 500, description: "Turn budget; wrap-up grace preserves partial output." })),
   max_cost: Type.Optional(Type.Number({ minimum: 0, description: "Soft execution USD ceiling checked after each turn; excludes unreported selector currency." })),
   grace_turns: Type.Optional(Type.Number({ minimum: 0, maximum: 20, description: "Extra wrap-up turns after budget breach; 0 stops immediately." })),
@@ -69,7 +69,7 @@ const requestFields = {
   task: Type.Optional(Type.String({ minLength: 1, description: "Single task to delegate." })),
   ...TaskFields,
   async: Type.Optional(Type.Boolean({ description: "Return a background handle; collect with subagent_wait." })),
-  tasks: Type.Optional(Type.Array(ParallelTaskItem, { minItems: 1, maxItems: 8, description: "Independent tasks; defaults to explore. Writers need worktrees or distinct cwd." })),
+  tasks: Type.Optional(Type.Array(ParallelTaskItem, { minItems: 1, maxItems: 10, description: "Independent tasks; defaults to explore. Writers need worktrees or distinct cwd." })),
   synthesis: Type.Optional(Type.String({ minLength: 1, description: "Additional read-only child combines parallel results; incurs selection/execution cost." })),
 };
 const envelope = { additionalProperties: false, description: "Subagent request: delegate or manage a run." } as const;
@@ -85,7 +85,7 @@ function buildSurface(mode: ToolMode) {
     action: actionSchema(mode === "full" ? FULL_ACTIONS : MANAGEMENT_ACTIONS),
     id: requestFields.id, message: requestFields.message, index: requestFields.index,
     task: requestFields.task, ...taskFields, async: requestFields.async,
-    tasks: Type.Optional(Type.Array(item, { minItems: 1, maxItems: 8, description: requestFields.tasks.description })),
+    tasks: Type.Optional(Type.Array(item, { minItems: 1, maxItems: requestFields.tasks.maxItems, description: requestFields.tasks.description })),
     ...(mode === "full" ? { synthesis: requestFields.synthesis } : {}),
   }, envelope);
 }

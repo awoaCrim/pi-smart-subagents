@@ -84,15 +84,22 @@ Because the native footer counts parent assistant messages plus delivered tool-r
    requests and pre-spawn rejected decisions. Route references inside task results
    never add selector usage again, and each receipt is folded once across
    replay/status/repeated wait.
-10. Native `usage` on the delivering tool result mirrors rule 2's run totals and is attached at most once per run (delivered-flag gated), so Pi-side totals cannot double count a run either. Worker pre-spawn routing tokens attach once at async start; the first delivery/wait attaches child execution usage plus any deferred-synthesis routing tokens not yet delivered; foreground completion attaches all invocation routing tokens plus execution tokens. Plan attaches only its own routing usage. Missing usage on an interrupted or invalid response stays **unknown**, never an invented zero. A partial or malformed token report retains individually validated counts while marking completeness unknown; for example, valid input with invalid output is not a complete report.
+10. Native `usage` on the delivering tool result mirrors rule 2's run totals and is attached at most once per run (delivered-flag gated), so Pi-side totals cannot double count a run either. Worker pre-spawn routing tokens attach once at ordinary async startup; an elapsed handoff/reminder claims neither output nor native usage, including selector work still pending. The first delivery/wait attaches child execution usage plus all undelivered linked routing tokens, including deferred synthesis or a selection completed after handoff. Foreground completion attaches all invocation routing tokens plus execution tokens. Plan attaches only its own routing usage. Missing usage on an interrupted or invalid response stays **unknown**, never an invented zero. A partial or malformed token report retains individually validated counts while marking completeness unknown; for example, valid input with invalid output is not a complete report.
 
 Native routing attachment commits atomically: foreground/wait use the run's single
 `delivered` event for linked receipts; plan and async-start use one `native-delivery`
 request-ID batch on the routing event stream. A throwing append does not consume a
 prefix or set the in-memory run delivered flag. Transient persistence failures retry
 without another selector call. A batch holds at most 1024 receipt IDs; larger plan or
-background requests must be split. Background requests check this bound before any
-child/run registration. Already incurred selector usage stays in the ledger.
+background requests must be split. Background requests check this bound before child launch; their early registered
+run retains failures. Already incurred selector usage stays in the ledger. Select
+the startup/terminal return outcome before its usage commit; an elapsed alarm
+cannot replace it mid-commit and silently lose the attachment. A startup receipt
+that settles during accounting refreshes its observation without claiming final
+execution usage. Linked selector selection and the existing run-delivery claim are
+committed in the same synchronous turn. Each startup batch persistence retry
+rechecks receipt and run delivery ownership, so a concurrent terminal wait or
+dismissal cannot make both tool results attach the same selector tokens.
 
 ## Branch semantics
 
@@ -102,7 +109,7 @@ Only `sessionManager.getBranch()` is used. Costs from abandoned sibling branches
 
 Any usage reported before a failure, timeout, budget stop, cancellation, or parent crash is retained in a cumulative checkpoint/terminal record. A run with no provider response contributes zero rather than an estimate.
 
-All ranked attempts share the absolute task deadline and cumulative `max_cost`/`max_turns` budget. Prior usage is an offset for the next child's budget comparisons, not part of that child's returned usage, so aggregation adds each attempt only once. A replacement cannot start after reported cost or turns meets its ceiling. In-attempt completed-turn checks and wrap-up grace remain unchanged. Pi's internal provider retries are not counted as separately launched extension attempts.
+All ranked attempts share one advisory invocation clock and cumulative `max_cost`/`max_turns` budget. Crossing the tool time threshold only returns control/reminds; it does not bound total elapsed spend, reset budgets or authorize another paid attempt. Explicit cancellation, independent faults and any explicit hard deadline remain enforceable. Prior usage is an offset for the next child's budget comparisons, not part of that child's returned usage, so aggregation adds each attempt only once. A replacement cannot start after reported cost or turns meets its ceiling. In-attempt completed-turn checks and wrap-up grace remain unchanged. Pi's internal provider retries are not counted as separately launched extension attempts.
 
 When every attempt fails, earlier output previews retain their originating model/session and the final task remains failed. Preserving billed work does not convert failure into `partial` or success. The existing native undercount for thrown failures still applies; the extension ledger retains all reported attempt usage.
 

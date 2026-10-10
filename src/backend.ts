@@ -142,7 +142,7 @@ export function checkCapabilities(
   const problems: string[] = [];
   if (spec.maxCost !== undefined && !capabilities.costReporting) {
     problems.push(
-      `adapter '${adapterName}' does not report per-turn cost, so max_cost cannot be enforced; drop max_cost or use max_turns/timeout_ms instead`,
+      `adapter '${adapterName}' does not report per-turn cost, so max_cost cannot be enforced; drop max_cost or use max_turns instead; tool timeout_ms only reminds and does not enforce a budget`,
     );
   }
   if (spec.resume && !capabilities.resume) {

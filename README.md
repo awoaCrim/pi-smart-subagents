@@ -34,6 +34,8 @@ The default **compact** mode keeps ordinary delegation, parallel/background task
 
 See [tool modes](docs/REFERENCE.md#tool-modes) for the field split and upgrade behavior.
 
+Task `timeout_ms` is a reminder, not a stop limit. At the threshold, a foreground call returns the run ID and the same work continues in the background. Use `status`, `wait`, `steer` or `cancel` to decide what happens next. Existing time settings now have this advisory meaning; turn/cost budgets and independent fault checks remain. See [budgets and retries](docs/REFERENCE.md#budgets-and-retries).
+
 - Open `/subagents` to inspect and manage tasks.
 - Open `/subagent-cost` to view usage.
 - See the [usage reference](docs/REFERENCE.md#quick-usage) for named agents, parallel tasks, background work, worktrees and structured results, or the [TUI guide](docs/UX.md) for keyboard controls.

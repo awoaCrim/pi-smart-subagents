@@ -35,7 +35,7 @@ export async function runLocalPreflights(
     const task = tasks[index]!;
     const controller = new AbortController();
     let timedOut = false;
-    const remaining = task.deadline === undefined ? task.timeoutMs : task.deadline - Date.now();
+    const remaining = task.deadline === undefined ? undefined : task.deadline - Date.now();
     const interrupted = () => new Error(timedOut
       ? `Task ${index + 1}: timeout during local preflight; no selector request was sent.`
       : "Local preflight cancelled; no selector request was sent.");
@@ -44,14 +44,14 @@ export async function runLocalPreflights(
       if (task.deadline !== undefined && Date.now() >= task.deadline) timedOut = true;
       if (timedOut || deps.signal.aborted || controller.signal.aborted) throw interrupted();
     };
-    if (remaining <= 0) { timedOut = true; throw interrupted(); }
+    if (remaining !== undefined && remaining <= 0) { timedOut = true; throw interrupted(); }
     check();
     let rejectInterrupted!: (reason: Error) => void;
     const interruption = new Promise<never>((_resolve, reject) => { rejectInterrupted = reject; });
     const onAbort = () => { controller.abort(); rejectInterrupted(interrupted()); };
     deps.signal.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => { timedOut = true; onAbort(); }, remaining);
-    timer.unref?.();
+    const timer = remaining === undefined ? undefined : setTimeout(() => { timedOut = true; onAbort(); }, remaining);
+    timer?.unref?.();
     // fs.stat/access do not accept AbortSignal. Racing them bounds the caller; check()
     // after every await also prevents a late filesystem response from starting more work.
     const wait = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -80,7 +80,7 @@ export async function runLocalPreflights(
         if (!writable) throw new Error(`Task ${index + 1}: output parent directory is not writable: ${parentDir}`);
       }
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       deps.signal.removeEventListener("abort", onAbort);
     }
   }

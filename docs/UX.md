@@ -64,9 +64,21 @@ trailing-edge coalescing; this presentation layer does not change that policy.
 
 ## Management and launch receipts
 
-Async launch says **Started in background** and supplies the run ID, without
-claiming completion. Plan says **no child spawned**; selection can still incur
-Jev charges, and dispatch selects again.
+Async launch says **Started in background** and supplies the full run ID, without
+claiming completion. If the run settles during startup accounting, the receipt
+shows that captured terminal state and asks for `wait`, without consuming the result.
+Plan says **no child spawned**; selection can still incur Jev charges, and dispatch
+selects again.
+
+Task `timeout_ms` is an advisory threshold. An overdue foreground call returns an
+**Elapsed handoff** receipt with the same full ID and truthful queued/running evidence;
+work continues in background ownership. An already-returned async run instead gets
+one plain parent steer reminder. Parallel uses the shortest resolved item threshold
+for the unfinished group; pending synthesis is identified separately from finished
+workers. Reminder receipts/messages are not `timeout`, completion or final delivery,
+and grant no renewed budget or paid-call allowance. Use status/wait/steer/cancel.
+After transfer the old initiating signal no longer cancels work; explicit cancel
+and session/tree shutdown still do.
 
 `status` is an explicitly labelled captured observation. `status` without an ID
 lists runs and the ledger; expand to inspect the full text. A completed `wait`
@@ -90,7 +102,8 @@ explicit-request semantics.
 
 ## Background widget and completions
 
-Only live `async:true` runs appear above the editor; foreground runs stay inline.
+Live parent runs transferred by `async:true` or elapsed foreground handoff appear
+above the editor; still-awaited foreground runs stay inline. Private `/btw` is excluded.
 The widget uses the same identity/state/body/metrics order, short run IDs and
 explicit hidden run/task counts. It shows at most four runs and two task rows per
 parallel run. Unfilled live slots are intentionally reserved.
@@ -99,6 +112,12 @@ The TUI installs one width-aware component. Its single 250ms timer requests
 repaints without reinstalling the widget. When no background run remains, or on
 teardown, the widget and timer are cleared. RPC uses bounded string rows because
 RPC does not render component factories.
+
+Elapsed reminders are one-shot `subagent-reminder` steer messages, separate from
+completion batching and the completion-only `notifications` setting. With
+`notifications: "off"`, overdue reminders still reach the parent; completion
+messages remain off. A foreground handoff receipt is not duplicated as a reminder
+message, and a completed/cancelled run gets no false overdue reminder.
 
 On completion, the parent receives the existing `subagent-completion` message
 with `{ deliverAs: "steer", triggerTurn: true }`. Successes batch; failures flush
@@ -148,8 +167,10 @@ Existing keys remain:
 `/btw` uses the same title/state/body order without inventing model, run or usage
 fields absent from its payload. Running and answer entries remain separate
 `appendEntry` events, hidden from the parent model. Expanded answers wrap in full.
-The private TUI entry owns its outcome, avoiding duplicate TUI toasts; non-TUI
-notifications retain their existing behavior.
+At the advisory threshold, a human-only notice says the private answer is still
+pending. It neither marks the entry done nor sends a parent reminder/completion.
+The private TUI entry owns its final outcome, avoiding duplicate terminal toasts;
+non-TUI notifications retain their existing behavior.
 
 ## Verification
 

@@ -24,6 +24,7 @@ export interface TaskDefaults {
   thinking?: ThinkingLevel;
   maxTurns?: number;
   maxCost?: number;
+  /** Elapsed reminder/handoff threshold for extension-managed tasks. */
   timeoutMs?: number;
   /** Ordered backup models tried on transient provider failures. */
   fallbackModels?: string[];
@@ -39,6 +40,7 @@ export interface SubagentConfig {
   maxTasksPerRun: number;
   maxActiveProcesses: number;
   maxQueuedTasks: number;
+  /** Default advisory task clock; not a maximum execution duration. */
   defaultTimeoutMs: number;
   maxResultBytes: number;
   maxResultLines: number;
@@ -87,16 +89,16 @@ export interface SubagentConfig {
    */
   widget: WidgetMode;
   /**
-   * Batched completion messages for async runs. `"off"` disables the
-   * CompletionBatcher so the parent is not notified on finish.
+   * Batched completion messages for background runs. `"off"` disables the
+   * CompletionBatcher, not the independent one-shot elapsed reminder.
    */
   notifications: NotificationMode;
 }
 
 export const defaultConfig: SubagentConfig = {
   toolMode: "compact",
-  maxTasksPerRun: 8,
-  maxActiveProcesses: 4,
+  maxTasksPerRun: 10,
+  maxActiveProcesses: 10,
   maxQueuedTasks: 32,
   defaultTimeoutMs: 15 * 60_000,
   maxResultBytes: 50 * 1024,

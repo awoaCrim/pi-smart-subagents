@@ -86,6 +86,15 @@ coverage uses explicit full configuration. Payload-size checks use fixed synthet
 catalogs and routing data; UTF-8 bytes are not token, latency or memory measurements.
 The Responses scenarios also run the installed Pi AI serializer with synthetic tools, a fake credential and an intentional pre-HTTP capture. They check the registered request hook, missing-versus-explicit `strict: false`, copy-on-change/immutability, compatibility no-ops and genuine mode conflicts. Fetch is denied and network attempts must remain zero. This boundary coverage catches declaration defects that calling `execute()` alone cannot expose.
 
+The timeout scenarios exercise advisory invocation clocks, preflight/routing handoff,
+queued/running observations, parallel groups, synthesis, old-caller detachment,
+explicit cancellation, session/branch cleanup, private `/btw`, and completion/usage
+commit races through the actual extension and registry. They also exercise real
+filesystem-preflight cancellation, delayed worktree setup/finalization with an
+injected child, and the actual runner/parser with synthetic Node RPC children.
+Those children verify independent startup/stall/budget stops and the preserved
+unranked SDK hard timeout; they never load Pi generation or call a provider.
+
 This is not a semantic typecheck, live-provider generation test or interactive terminal smoke test. The focused serializer fixture was verified against Pi 1.0.0; report a different installed host's result separately rather than assuming its serializer has the same compatibility defaults.
 
 #### Tool-surface size fixture

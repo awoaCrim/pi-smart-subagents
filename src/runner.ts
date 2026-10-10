@@ -82,7 +82,7 @@ export interface RunnerOptions {
   stallKillAfterMs?: number;
   /**
    * Bounded startup-verification budget for routed tasks (model/tool handshake before
-   * the real prompt). Defaults to 30s and is always clamped by the remaining task time.
+   * the real prompt). Defaults to 30s; clamped only by an explicit hard task deadline.
    */
   startupTimeoutMs?: number;
   /** Optional child adapter override for focused tests; the default is Pi. */
@@ -292,12 +292,11 @@ export class ChildRunner {
       absoluteDeadline === undefined
         ? undefined
         : Math.max(0, absoluteDeadline - Date.now());
-    // The absolute task deadline is honored from the first line of the run and is never
-    // reset by a retry, restart or a later phase.
-    const effectiveTimeoutMs =
-      deadlineRemainingMs === undefined
-        ? spec.timeoutMs
-        : Math.min(spec.timeoutMs, deadlineRemainingMs);
+    // Routed tool time is advisory. Only an explicit hard deadline or the trusted
+    // unranked SDK timeout stops elapsed work; neither is reset by a later phase.
+    const effectiveTimeoutMs = routed
+      ? deadlineRemainingMs
+      : deadlineRemainingMs === undefined ? spec.timeoutMs : Math.min(spec.timeoutMs, deadlineRemainingMs);
     type StartupWaiter = {
       test: (update: ProtocolUpdate) => boolean;
       resolve: (update: ProtocolUpdate | null) => void;
@@ -321,8 +320,8 @@ export class ChildRunner {
     let childExited:
       { code: number | null; signal: NodeJS.Signals | null; error?: Error } | undefined;
 
-    // Internal signal combines the caller's abort with the run timeout so both
-    // interrupt semaphore queue waits. Queue time counts against timeoutMs.
+    // Cancellation and any explicit/SDK hard timeout interrupt queue waits.
+    // The extension owns the routed advisory clock outside this child attempt.
     const internal = new AbortController();
     const onExternalAbort = () => internal.abort();
     const onInternalAbort = () => settleStartupWaiters();
@@ -330,13 +329,13 @@ export class ChildRunner {
     if (abortSignal?.aborted) internal.abort();
     else
       abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
-    const timeout = setTimeout(() => {
+    const timeout = effectiveTimeoutMs === undefined ? undefined : setTimeout(() => {
       // Record which phase timed out before nightfall.
       timeoutPhase = !slotHeld ? "queued" : !spawned || (routed && !taskPromptSent) ? "starting" : "running";
       requestStop("timeout");
       internal.abort();
     }, effectiveTimeoutMs);
-    timeout.unref?.();
+    timeout?.unref?.();
 
     const release = () => {
       if (slotHeld) {
@@ -475,7 +474,7 @@ export class ChildRunner {
 
     const cleanup = async () => {
       this.sendCommand = undefined;
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       stopStallWatchdog();
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (startupTimer) clearTimeout(startupTimer);
@@ -1182,8 +1181,8 @@ export class ChildRunner {
 
       let startupOutcome: StartupOutcome = { kind: "ok" };
       if (routed) {
-        // Bounded by both the local startup budget and the remaining absolute task time.
-        startupBudgetMs = Math.min(
+        // Startup has its own capability-handshake bound, not the advisory task clock.
+        startupBudgetMs = effectiveTimeoutMs === undefined ? this.startupTimeoutMs : Math.min(
           this.startupTimeoutMs,
           Math.max(0, effectiveTimeoutMs - (Date.now() - startedAt)),
         );

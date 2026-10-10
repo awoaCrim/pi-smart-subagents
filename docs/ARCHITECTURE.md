@@ -62,10 +62,11 @@
   Flat-YAML frontmatter + markdown persona body; resolved in policy with explicit
   params > agent file > profile taskDefaults > selected candidate > difficulty default > parent inheritance where applicable. Catalog refreshes
   lazily (5s TTL) so new files work mid-session; symlinks and oversized files skipped.
-- `notifications.ts`: background-run completion batching. Successes group within a
-  debounce window (hard cap on hold time); failures bypass batching and flush
-  immediately; delivered-state is re-checked at flush time so a consuming `wait`
-  suppresses the redundant notification.
+- `notifications.ts`: background-run completion batching and the independent owned
+  one-shot invocation reminder timer. Successes group within a debounce window
+  (hard cap on hold time); failures flush immediately; delivered-state is re-checked
+  at flush time so a consuming `wait` suppresses redundant completion. A live
+  reminder uses the tool receipt or a parent steer message, never the batcher.
 - `ui.ts`: renderers, footer status and `/subagents` inspector. The ambient widget
   (extension-side) shows BACKGROUND runs only — foreground runs render inline as the
   tool result, so widget display would double-render them.
@@ -101,11 +102,16 @@ Invariants:
     background run. Only `cancel` (or parent shutdown) aborts a run.
 14. Budget stops (`max_turns`/`max_cost`) with at least one completed turn end as `partial`
     and deliver their output normally. Streams truncated after useful assistant output also
-    end as `partial`. Timeouts report `state: "timeout"` with `timeoutPhase`.
-15. `timeout_ms` covers the whole task, including local preflight, Jev routing, setup,
-    semaphore queue time and child execution. The phase (`routing` / `queued` / `starting` /
-    `running` / `cancelling`) is recorded so agents can distinguish pre-spawn evidence from
-    child timeout behavior and apply the right retry policy.
+    end as `partial`. Actual hard timeout outcomes and historical records retain
+    `state: "timeout"` with optional `timeoutPhase`; elapsed reminders are not terminal states.
+15. Tool task `timeout_ms` is one advisory invocation clock from before preparation,
+    including preflight, routing, setup, queue, startup, attempts and optional synthesis.
+    Parallel groups use the shortest resolved item threshold, with no phase reset.
+    Expiry returns a live foreground receipt or sends one background reminder; it
+    never kills, retries, reselects, renews budgets or consumes final output/native usage.
+    Saved tool/default/agent/profile values are intentionally no longer hard runtime
+    bounds. `subagent_wait.timeout_ms` remains a non-cancelling wait limit. Trusted
+    unranked SDK timeout and explicit hard deadlines retain their existing enforcement.
 16. Worktrees live under a durable root (`~/.pi/subagent-worktrees`), never a purgeable OS
     tmpdir. Startup maintenance (top-level parents only) prunes stale git registrations,
     removes unchanged leftovers, and sweeps changed-but-expired worktrees. Live-run
@@ -125,12 +131,17 @@ Invariants:
 20. Budget breaches (`max_turns`/`max_cost`) steer a wrap-up message and allow grace
     turns before SIGTERM; a child that concludes within grace ends `partial` with
     `wrappedUp: true`. `graceTurns: 0` restores immediate stops.
-21. Extension-managed ranked tasks permit at most `maxRetries` extra child attempts, locally capped at 255 total launches. A recognized settled availability failure advances to the next candidate only with conclusive no-tool activity; started or unknown activity blocks all new-child restart. Candidate exhaustion never wraps to the primary. Conclusively pre-work infrastructure retry may repeat the same candidate within the same budget. No retry calls Jev or broadens tools. Usage and budget comparisons include prior attempts. Authentication, quota/billing, invalid requests, context limits, task-quality, cancellation, task-deadline and budget stops do not cause model failover. The trusted unranked SDK keeps its legacy transient/explicit-fallback behavior.
+21. Extension-managed ranked tasks permit at most `maxRetries` extra child attempts, locally capped at 255 total launches. A recognized settled availability failure advances to the next candidate only with conclusive no-tool activity; started or unknown activity blocks all new-child restart. Candidate exhaustion never wraps to the primary. Conclusively pre-work infrastructure retry may repeat the same candidate within the same budget. No retry calls Jev or broadens tools. Usage and budget comparisons include prior attempts. Authentication, quota/billing, invalid requests, context limits, task-quality, cancellation, explicit hard-deadline and budget stops do not cause model failover. An advisory reminder never authorizes another attempt. The trusted unranked SDK keeps its legacy transient/explicit-fallback behavior.
 22. The stall watchdog treats protocol silence as suspect, not fatal: after
     `stallAfterMs` the task is flagged and probed via `get_state` (a live child's
     answer clears the flag); only continued silence for `stallKillAfterMs` more kills
     the child. A stall does not authorize restart on the ranked path: silence cannot establish that no work began.
-23. Only `async: true` runs notify on completion and appear in the ambient widget.
+23. Parent runs transferred to background ownership by `async: true` startup or an
+    elapsed foreground handoff notify on completion and appear in the ambient widget.
+    Transfer detaches the old initiating signal; explicit cancel/shutdown still stop
+    the same run. Private `/btw` never enters parent notification ownership and keeps
+    privately awaiting its answer after a human-only overdue notice. `notifications`
+    controls completion messages, not the independent one-shot elapsed reminder.
     Notification delivery respects delivered-once: a `wait` that consumed the run
     suppresses the notification. The actual final model and a bounded attempt-chain tail with its total count use the same display projection as compact results.
 24. Named agent files supply per-field defaults only; request fields win where the
@@ -182,11 +193,21 @@ Invariants:
     same immutable candidate/native/forced sets before the task prompt. Hidden tools are
     excluded, missing exposure defaults to direct, and unknown present exposure values are
     dropped. No user name list, source preset or indefinite activation wait is introduced.
-31. An absolute task deadline is created before preflight/selection, and routing, setup,
-    queue and retries all count against it. Pending selector work is tracked per session
-    runtime, aborted on cancellation, shutdown or session switch, and every post-await
-    transition re-checks captured runtime/session ownership so a late response cannot
-    launch into a replaced session. Replacement attempts await prior child cleanup, retain run/worktree/resume ownership and recheck cancellation, deadline and cumulative task budgets before launch. Durable task records remain running during replacement and finalization, protecting all known attempt sessions and the worktree across parent processes; only child slots are released per attempt. Pi/provider internal retries and global retry settings remain unchanged.
+31. Registered dispatch settlement owns the entire pipeline independently of the
+    initiating tool's wait. An elapsed handoff cannot finish a pending routing scope,
+    claim startup/final usage or resolve lifecycle settlement while work continues.
+    Pending selection is tracked per session runtime and aborted on explicit cancel,
+    shutdown or session switch. Every post-await transition, including configuration
+    preparation before registration, re-checks captured runtime/generation ownership
+    so a late response cannot launch on a changed branch/session. Queue/setup remains
+    queued until execution advances; a completed worker never terminalizes its group
+    or pending synthesis. Startup/terminal return outcomes are selected before native
+    usage commits and cannot be replaced by an alarm mid-commit; receipts refresh
+    their observation afterward without claiming full-result delivery. Replacement
+    attempts await prior cleanup and recheck cancellation, any explicit hard deadline
+    and cumulative budgets. Durable task records protect all known attempt sessions
+    and worktrees through replacement/finalization; child slots release per attempt.
+    Pi/provider internal retries and global retry settings remain unchanged.
 32. Before any paid selection, plan and dispatch share a side-effect-free direct-resume
     availability check (in-memory owner, `resumeBlocked`, durable lock ownership and
     staleness) that acquires, renews or reaps nothing. Dispatch still takes the

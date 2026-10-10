@@ -3,8 +3,8 @@
  *
  * When an async run reaches a terminal state, the parent LLM is notified with
  * a steer message (queued for delivery before the next LLM call) so it can
- * react without polling status/wait. Matches the notification-as-delivery
- * semantics of `wait`: whichever path delivers first wins via markDelivered.
+ * react without polling status/wait. A notification does not consume the full
+ * result or native usage; `wait` still owns the markDelivered collection gate.
  *
  * Batching: successes completing within a short window group into a single
  * message (no notification spam in fanouts). Failures bypass batching and
@@ -69,6 +69,42 @@ export class CompletionBatcher {
     this.timer = undefined;
     this.pending = [];
   }
+}
+
+/** One invocation clock, independent of completion batching. No persisted policy or retries. */
+export function startInvocationReminder(
+  targetAt: number,
+  signal: AbortSignal,
+  settled: Promise<unknown>,
+  onDue: () => void,
+  now: () => number = Date.now,
+): () => void {
+  let timer: NodeJS.Timeout | undefined;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    signal.removeEventListener("abort", dispose);
+  };
+  const arm = () => {
+    if (disposed) return;
+    if (now() >= targetAt) { dispose(); onDue(); return; }
+    // Node clamps oversized delays to 1ms. Chunk the delay, never the absolute target.
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (disposed) return;
+      if (now() < targetAt) { arm(); return; }
+      dispose();
+      onDue();
+    }, Math.min(2_147_483_647, Math.max(0, targetAt - now())));
+    timer.unref?.();
+  };
+  if (signal.aborted) dispose();
+  else { signal.addEventListener("abort", dispose, { once: true }); arm(); }
+  void settled.then(dispose, dispose);
+  return dispose;
 }
 
 /** Compact renderer-facing payload for one completed task in a run. */

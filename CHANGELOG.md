@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.0 — 2026-10-10
+
+- **Breaking tool contract:** task `timeout_ms`, including inherited agent/profile/default values, is now an elapsed reminder and foreground handoff threshold, not a hard runtime limit. The same run continues under its full ID until it finishes, faults or is explicitly cancelled.
+- Send one reminder per invocation, using the shortest resolved item threshold for parallel work. Reuse status/wait/steer/cancel, preserve once-only output and usage collection, and keep `/btw` reminders and answers private.
+- Retain turn/cost budgets, independent selector/startup/stall safeguards, ownership cleanup and the trusted unranked SDK's hard timeout. `subagent_wait.timeout_ms` remains a non-cancelling wait limit.
+- Raise the batch cap to 10 in both tool modes and the shared default per-parent concurrency from 4 to 10. Preserve configuration overrides, queue/global/depth safeguards and existing budgets.
+
 ## 0.11.15 — 2026-10-08
 
 - Preserve sparse `subagent` and `subagent_wait` arguments on the matching physical OpenAI Responses path by adding a missing `strict: false` tool declaration. Keep genuine mode conflicts, compact/full validation, explicit compatibility/strict values and unrelated tools unchanged.

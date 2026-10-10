@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { extensionScenarios } from './extension-scenarios.mjs';
 import { surfaceScenarios } from './surface-scenarios.mjs';
 import { responsesScenarios } from './responses-scenarios.mjs';
+import { timeoutScenarios } from './timeout-scenarios.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -579,6 +580,9 @@ try {
   section('actual Responses serialization and sparse declaration boundary');
   await responsesScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson });
 
+  section("advisory invocation clocks, handoff and synthetic RPC safeguards");
+  await timeoutScenarios({ SRC, PI_ROOT, temp, theme, TUI, ok, eq, eqJson });
+
   // -------------------------------------------------------------------------
   section("single-run render regression fixtures");
   // -------------------------------------------------------------------------
@@ -625,8 +629,12 @@ try {
 } catch (error) {
   failures.push(`harness error: ${error?.stack ?? error}`);
 } finally {
-  if (!KEEP) fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  else console.log(`\nbundles kept at ${temp}`);
+  if (!KEEP) {
+    // Synthetic RPC children use this cwd. Let close callbacks drain during
+    // Windows retries, and never hide a behavioral failure with cleanup's error.
+    try { await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+    catch (error) { failures.push(`temporary fixture cleanup failed (${temp}): ${error?.message ?? error}`); }
+  } else console.log(`\nbundles kept at ${temp}`);
 }
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

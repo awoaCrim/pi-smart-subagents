@@ -152,8 +152,9 @@ export interface TaskSpec {
   profile: TaskProfile;
   canWrite?: boolean;
   cwd?: string;
+  /** Advisory for routed extension tasks; hard elapsed limit for trusted unranked SDK specs. */
   timeoutMs: number;
-  /** Absolute extension task deadline; absent for legacy explicit-spec SDK callers. */
+  /** Optional explicit hard deadline; ordinary extension tools do not derive it from timeoutMs. */
   deadline?: number;
   /** Present only after mandatory extension routing and local validation. */
   routing?: TaskRouting;

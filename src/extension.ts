@@ -54,7 +54,7 @@ import type { RunSnapshot, TaskResult, TaskSpec, UsageStats } from "./types.js";
 import { emptyUsage } from "./types.js";
 import { addUsage, buildUsageLedger, formatLedger, hasBilledUsage, routingUsage, toPiUsage, type UsageLedger } from "./usage.js";
 import { resolveSessionFilePath } from "./transcript.js";
-import { CompletionBatcher, COMPLETION_MESSAGE_TYPE, type CompletionDetails, type CompletionDetailsRun, type CompletionDetailsTask } from "./notifications.js";
+import { CompletionBatcher, startInvocationReminder, COMPLETION_MESSAGE_TYPE, type CompletionDetails, type CompletionDetailsRun, type CompletionDetailsTask } from "./notifications.js";
 import { describeCatalog, discoverAgents, type AgentDefinition } from "./agents.js";
 import {
   createSubagentsOverlay,
@@ -85,7 +85,7 @@ interface SessionRuntime {
   getPiCommand: ReturnType<typeof createGetPiCommand>;
   /** Live per-run child runners, for mid-run steering. runId → task index → runner. */
   liveRunners: Map<string, Map<number, ChildRunner>>;
-  /** Run ids started with async:true — the only runs that notify on completion. */
+  /** Parent runs transferred to background ownership (async startup or elapsed handoff). */
   asyncRuns: Set<string>;
   completions?: CompletionBatcher;
   widgetTimer?: NodeJS.Timeout;
@@ -559,7 +559,8 @@ function guidelines(toolMode: ToolMode, catalog?: Map<string, AgentDefinition>):
     "Delegate independent work; keep tightly coupled steps in the parent. Prefer a matching named agent. Give each task a 3-5 word description and the lowest truthful difficulty: simple, moderate or complex.",
     "Single tasks default to general (may write), parallel tasks to explore; explore/review restrict ordinary write tools, not OS permissions. Native tools retain host semantics.",
     "Parallel writers need isolation:'worktree' or distinct cwd. Inspect action:'diff' before 'apply' (uncommitted changes) or 'discard'.",
-    "timeout_ms includes preflight, routing, queue and retries. max_turns/max_cost are soft wrap-up budgets; partial output survives. max_cost excludes unreported selector currency.",
+    "timeout_ms is an elapsed reminder/foreground handoff threshold, not a stop limit; it includes preflight, routing, queue, retries and synthesis. Parallel uses the shortest item threshold. The same run continues: use status/wait/steer/cancel. A reminder grants no new paid-call allowance.",
+    "max_turns/max_cost remain soft wrap-up budgets; partial output survives. max_cost excludes unreported selector currency. Startup/request/stall faults can still stop work.",
     "Use async:true only with independent work meanwhile; collect via subagent_wait. Wait timeout/abort leaves work alive; cancel stops it, steer adds guidance. Status is a preview; full delivery/usage is once-only.",
     ...(toolMode === "full" ? [
       "Full opt-ins: resume/fork_resume continue sessions; context:'fork' uses persisted parent history (single task). synthesis adds a read-only child and cost. output_schema validates fenced json:result with one repair; output_mode:'file-only' needs output.",
@@ -816,12 +817,12 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
     reconcileRouting(runtime);
   }
 
-  async function claimRoutingUsage(runtime: SessionRuntime, options: { ids?: ReadonlySet<string>; runId?: string }): Promise<UsageStats> {
+  async function claimRoutingUsage(runtime: SessionRuntime, options: { ids?: ReadonlySet<string>; runId?: string }): Promise<{ usage: UsageStats; claimRun?: () => { usage: UsageStats; firstDelivery: boolean } }> {
     const generation = runtime.routingGeneration;
     await requireRoutingPersistence(runtime);
     if (!ownsRouting(runtime, generation)) fail("Routing delivery belongs to a previous session/branch.");
     const folded = foldRoutingReceipts(activeEntries(runtime), [...runtime.pendingRoutingEvents.values()], runtime.key);
-    const selected = [...folded.values()].filter((entry) => !entry.delivered
+    let selected = [...folded.values()].filter((entry) => !entry.delivered
       && (!options.ids || options.ids.has(entry.requestId)) && (!options.runId || entry.runId === options.runId));
     if (!options.runId && selected.length > MAX_ROUTING_DELIVERY_IDS) fail(`Native routing delivery exceeds ${MAX_ROUTING_DELIVERY_IDS} selector receipts. Split this plan/background request into smaller invocations; selector usage is retained in the ledger.`);
     if (!options.runId && selected.length) {
@@ -832,6 +833,17 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
       let persisted = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (!ownsRouting(runtime, generation)) fail("Routing delivery belongs to a previous session/branch.");
+        // A terminal wait/dismiss may win during the persistence retry await.
+        // Recheck durable/overlay receipts and the registry delivery owner before
+        // committing this batch; never attach an already-claimed prefix.
+        const latest = foldRoutingReceipts(activeEntries(runtime), [...runtime.pendingRoutingEvents.values()], runtime.key);
+        selected = selected.filter((entry) => {
+          if (latest.get(entry.receipt.requestId)?.delivered) return false;
+          const linked = entry.runId ? runtime.registry.lookup(entry.runId, runtime.key) : undefined;
+          return !(linked?.status === "found" && linked.run?.delivered);
+        });
+        if (!selected.length) { persisted = true; break; }
+        event.requestIds = selected.map((entry) => entry.requestId);
         try { pi.appendEntry(ROUTING_ENTRY_TYPE, event); persisted = true; break; }
         catch { if (attempt < 2) await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 20); timer.unref?.(); }); }
       }
@@ -843,9 +855,20 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
       runtime.ledgerDirty = true;
       reconcileRouting(runtime);
     }
-    // Linked run receipts are consumed by registry.markDelivered's single event.
-    // The caller performs that synchronous commit only after this await succeeds.
-    return routingUsage(selected.map((entry) => entry.receipt));
+    if (options.runId) {
+      const runId = options.runId;
+      // The caller checks ownership after this await, then invokes one synchronous
+      // selection + existing registry commit. No stale prepared token attachment
+      // can survive a startup batch winning in the intervening microtask.
+      return { usage: emptyUsage(), claimRun: () => {
+        if (!ownsRouting(runtime, generation)) fail("Routing delivery belongs to a previous session/branch.");
+        const latest = foldRoutingReceipts(activeEntries(runtime), [...runtime.pendingRoutingEvents.values()], runtime.key);
+        const receipts = [...latest.values()].filter((entry) => !entry.delivered && entry.runId === runId);
+        const firstDelivery = runtime.registry.markDelivered(runId, runtime.key);
+        return { usage: firstDelivery ? routingUsage(receipts.map((entry) => entry.receipt)) : emptyUsage(), firstDelivery };
+      } };
+    }
+    return { usage: routingUsage(selected.map((entry) => entry.receipt)) };
   }
 
   function beginRouting(runtime: SessionRuntime, signal?: AbortSignal, runId?: string) {
@@ -1201,6 +1224,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
   // not a caller property that could evade the closed envelope validator.
   async function executeSubagent(_id: string, params: SubagentParams, signal: AbortSignal | undefined,
     onUpdate: Parameters<ToolExecute>[3], ctx: ExtensionContext, waitTimeoutMs?: number,
+    audience: "parent" | "private" = "parent",
   ): Promise<Awaited<ReturnType<ToolExecute>>> {
       const surfaceError = subagentSurfaceError(params, toolMode);
       if (surfaceError) fail(surfaceError);
@@ -1222,6 +1246,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         id: string;
         controller: AbortController;
         resolveDone: () => void;
+        done: Promise<void>;
         directResumes: string[];
         specs: TaskSpec[];
         childStarted: boolean;
@@ -1233,7 +1258,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         const registration = registeredRun;
         if (!registration || registration.childStarted || registration.completed) return;
         registration.completed = true;
-        const cancelledBeforeAbort = signal?.aborted || runtime.routingPaused || registration.controller.signal.aborted;
+        const cancelledBeforeAbort = runtime.routingPaused || registration.controller.signal.aborted;
         registration.controller.abort();
         signal?.removeEventListener("abort", registration.parentAbort);
         const scope = routingScope;
@@ -1298,6 +1323,11 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
       try {
       // Management does not read a config file, credential or model/tool catalog.
       const dispatchConfig = management ? runtime.config : loadConfig(await readConfigFile());
+      // Config preparation predates registration. Never let an old invocation
+      // adopt a newer branch generation when beginRouting is created later.
+      if (!management && (!ownsRouting(runtime, requestGeneration) || runtime.routingPaused)) {
+        fail("Subagent request belonged to a previous session/branch; no run was registered or selector request sent.");
+      }
       // Take exactly one registered-metadata snapshot and one active-name snapshot.
       // The official exposure partition below drives both policy and Jev's catalog;
       // SDK/custom direct tools are intentionally not filtered by source.
@@ -1639,9 +1669,11 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         const terminal = refreshed.status === "found" && refreshed.run
           ? "controller" in refreshed.run ? snapshotFromLiveRun(refreshed.run) : refreshed.run
           : snapshot;
-        const selectorUsage = await claimRoutingUsage(runtime, { runId: terminal.id });
+        const routingClaim = await claimRoutingUsage(runtime, { runId: terminal.id });
         if (!ownsRouting(runtime, requestGeneration)) fail("Wait belonged to a previous session/branch.");
-        if (!runtime.registry.markDelivered(terminal.id, runtime.key)) {
+        if (!routingClaim.claimRun) fail("Run routing delivery claim is missing.");
+        const { usage: selectorUsage, firstDelivery } = routingClaim.claimRun();
+        if (!firstDelivery) {
           return {
             content: [{ type: "text", text: `Run ${terminal.id} was already delivered. Artifacts and sessions remain available in /subagents.` }],
             details: details(terminal.mode, terminal.results, {
@@ -1667,7 +1699,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         return deliveredResult(text, details(terminal.mode, delivered.cappedResults as any, terminal), terminal.results, selectorUsage);
       }
 
-      preparedTasks = validated.tasks.map((task) => ({ ...task, deadline: invocationStartedAt + task.timeoutMs }));
+      preparedTasks = validated.tasks;
       if (validated.planOnly) {
         routingScope = beginRouting(runtime, signal);
       } else {
@@ -1686,6 +1718,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
           id: runId,
           controller,
           resolveDone,
+          done,
           directResumes: [],
           specs: placeholders,
           childStarted: false,
@@ -1701,6 +1734,67 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         routingScope = beginRouting(runtime, controller.signal, runId);
       }
 
+      let outcomeChosen = false;
+      let returned = false;
+      let reminderDue = false;
+      let callerDetached = false;
+      let synthesisPending = false;
+      let workerReceiptIds = new Set<string>();
+      let resolveHandoff!: () => void;
+      const handoff = new Promise<"handoff">((resolve) => { resolveHandoff = () => resolve("handoff"); });
+      let resolveStartup!: () => void;
+      const startup = new Promise<"startup">((resolve) => { resolveStartup = () => resolve("startup"); });
+      const liveSnapshot = (): RunSnapshot | undefined => {
+        if (!registeredRun || !ownsRouting(runtime, requestGeneration) || runtime.routingPaused
+          || registeredRun.controller.signal.aborted) return;
+        const found = runtime.registry.lookup(registeredRun.id, runtime.key);
+        // Individual completed workers (and synthesis) are not dispatch settlement.
+        if (found.status !== "found" || !found.run || !("controller" in found.run)
+          || found.run.controller !== registeredRun.controller) return;
+        return snapshotFromLiveRun(found.run);
+      };
+      const transfer = (): RunSnapshot | undefined => {
+        const snapshot = liveSnapshot();
+        if (!snapshot || !registeredRun) return;
+        signal?.removeEventListener("abort", registeredRun.parentAbort);
+        callerDetached = true;
+        runtime.asyncRuns.add(snapshot.id);
+        refreshFooter(runtime);
+        refreshWidget(runtime);
+        return snapshot;
+      };
+      const reminderText = (snapshot: RunSnapshot) => [
+        `Elapsed reminder for run ${snapshot.id} after ${formatDuration(Date.now() - invocationStartedAt)}: ${snapshot.state}.`,
+        formatStatusPreview(snapshot),
+        ...(synthesisPending ? ["Workers have settled; optional synthesis is still pending."] : []),
+        "The same run continues; this is not a timeout or final delivery. Use status/wait/steer/cancel with the full id. Selector currency is unreported; no additional paid-call allowance is granted.",
+      ].join("\n");
+      const notifyReminder = () => {
+        const snapshot = liveSnapshot();
+        if (!snapshot) return;
+        if (audience === "private") {
+          ctx.ui.notify(`by the way: ${snapshot.id} is still ${snapshot.state} after ${formatDuration(Date.now() - invocationStartedAt)}; privately awaiting its answer.`, "info");
+        } else if (runtime.asyncRuns.has(snapshot.id)) {
+          pi.sendMessage({ customType: "subagent-reminder", content: reminderText(snapshot), display: true },
+            { deliverAs: "steer", triggerTurn: true });
+        }
+      };
+      if (registeredRun) startInvocationReminder(
+        invocationStartedAt + Math.min(...preparedTasks.map((task) => task.timeoutMs)),
+        registeredRun.controller.signal, registeredRun.done,
+        () => {
+          if (!liveSnapshot()) return;
+          reminderDue = true;
+          if (audience === "private" || returned) notifyReminder();
+          else if (!outcomeChosen) resolveHandoff();
+          // A startup/terminal outcome already selected for a usage commit cannot be
+          // replaced by the alarm. A live async reminder waits for that receipt.
+        },
+      );
+
+      // This pipeline, not the initiating tool's wait, owns routing and settlement.
+      const pipeline = (async () => {
+      try {
       if (!routingScope) fail("Internal routing scope is missing.");
       routingScope.assertOwner();
       await requireRoutingPersistence(runtime);
@@ -1726,7 +1820,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
           timeout_ms: Math.min(runtime.config.defaultTimeoutMs, 5 * 60_000),
         }, parent, preparation);
         if (!normalized.ok) fail(normalized.error);
-        return normalized.tasks.map((task) => ({ ...task, deadline: Date.now() + task.timeoutMs }));
+        return normalized.tasks;
       };
       if (validated.planOnly) {
         let synthesis: { state: "resolved"; plan: ReturnType<typeof formatPlanEntry> } | { state: "blocked"; error: string } | undefined;
@@ -1749,9 +1843,9 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         const plan = resolved.map((task, index) => formatPlanEntry(task, index, runtime.config.maxRetries));
         const mode = validated.mode as "single" | "parallel";
         const receipts = [...routingScope.receipts.values()];
-        const selectorUsage = await claimRoutingUsage(runtime, { ids: new Set(receipts.map((receipt) => receipt.requestId)) });
+        const { usage: selectorUsage } = await claimRoutingUsage(runtime, { ids: new Set(receipts.map((receipt) => receipt.requestId)) });
         const text = [formatPlanText(mode, plan), synthesis ? `Optional synthesis: ${synthesis.state}${synthesis.state === "blocked" ? ` — ${synthesis.error}` : ` (${synthesis.plan.model})`}` : "", "Selector tokens are reported separately; TypeSafe currency is unreported. A later dispatch selects again."].filter(Boolean).join("\n");
-        return deliveredResult(text, { mode, plan, synthesis, presentation: { kind: "plan", operation: "Plan · no child spawned" } satisfies RunPresentation, routingReceipts: receipts, routingCurrency: "unreported" }, [], selectorUsage);
+        return { kind: "plan" as const, value: deliveredResult(text, { mode, plan, synthesis, presentation: { kind: "plan", operation: "Plan · no child spawned" } satisfies RunPresentation, routingReceipts: receipts, routingCurrency: "unreported" }, [], selectorUsage) };
       }
 
       const specs: TaskSpec[] = resolved.map(({ effectiveTools, resolutionNotes: _notes, ...task }) => ({
@@ -1767,7 +1861,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
       const runId = registeredRun.id;
       const controller = registeredRun.controller;
       const parentAbort = registeredRun.parentAbort;
-      const workerReceiptIds = new Set(routingScope.receipts.keys());
+      workerReceiptIds = new Set(routingScope.receipts.keys());
       const directResumes = resolved.filter((task) => task.resume && !task.forkResume).map((task) => task.resume!);
       registeredRun.directResumes = directResumes;
       const lock = runtime.registry.acquireResumeLocks(directResumes, runId, runtime.key);
@@ -1787,6 +1881,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
       const lastSeen = new Map<number, { state?: string; sessionId?: string; turns: number }>();
       const emitUpdate = () => {
         if (pendingFlush) { clearTimeout(pendingFlush); pendingFlush = undefined; }
+        if (callerDetached || !ownsRouting(runtime, executionGeneration)) return;
         lastStreamedUpdate = Date.now();
         const live = runtime.registry.lookup(runId, runtime.key);
         if (live.status !== "found" || !live.run) return;
@@ -1796,6 +1891,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         onUpdate?.({ content: [{ type: "text", text: formatStatusPreview(snap) }], details: details(snap.mode, snap.results, snap) });
       };
       const streamUpdate = (index: number, partial: Partial<TaskResult>) => {
+        if (callerDetached) return;
         const seen = lastSeen.get(index) ?? { turns: 0 };
         const structural =
           (partial.state !== undefined && partial.state !== seen.state) ||
@@ -1862,13 +1958,18 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
                   updatedAt: Date.now(),
                 });
               }
+              const live = runtime.registry.lookup(runId, runtime.key);
+              const allQueued = live.status === "found" && live.run && "controller" in live.run
+                && live.run.results.every((result, taskIndex) =>
+                  (taskIndex === index ? partial.state ?? result.state : result.state) === "queued");
               runtime.registry.checkpoint(runId, runtime.key, {
                 resultIndex: index,
                 resultUpdate: partial,
                 childSessionId: partial.sessionId,
                 progress: partial.liveText?.slice(0, 200),
                 turn: partial.usage?.turns,
-                state: partial.state,
+                // Queue/setup stays queued; a settled worker never ends the dispatch.
+                state: allQueued ? "queued" : "running",
               });
               streamUpdate(index, partial);
             },
@@ -1876,6 +1977,12 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
           // Optional fan-in: one read-only child folds parallel outputs into a
           // single brief, delivered first. Failures degrade to raw results.
           if (validated.synthesis && result.results.length > 1 && !controller.signal.aborted) {
+            synthesisPending = true;
+            for (let index = 0; index < result.results.length; index++) {
+              runtime.registry.checkpoint(runId, runtime.key, {
+                resultIndex: index, resultUpdate: result.results[index], state: "running",
+              });
+            }
             const synthesized = await runSynthesis(runtime, validated.synthesis, result.results, {
               runId, signal: controller.signal,
               assertOwner() {
@@ -1897,6 +2004,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
                 } finally { scope.finish(); }
               },
             });
+            synthesisPending = false;
             if (synthesized.result) result.results = [synthesized.result, ...result.results];
             if (synthesized.diagnostic) result.summary = `${synthesized.diagnostic}\n\n${result.summary}`;
           }
@@ -1936,20 +2044,81 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         }
       })();
 
-      if (validated.async) {
-        runtime.asyncRuns.add(runId);
-        refreshFooter(runtime);
-        const selectorUsage = await claimRoutingUsage(runtime, { ids: workerReceiptIds });
-        return deliveredResult(`Started run ${runId}. You will be notified on completion; use status/wait/cancel with this full id, or open /subagents. Selector currency is unreported.`,
-          { ...details(validated.mode as "single" | "parallel", [], { id: runId, presentation: { kind: "startup", operation: "Started in background", id: runId } }), routingReceipts: [...routingScope.receipts.values()], routingCurrency: "unreported" }, [], selectorUsage);
+      if (validated.async && audience === "parent") resolveStartup();
+      return { kind: "terminal" as const, result: await work };
+      } catch (error) {
+        if (registeredRun && !registeredRun.childStarted) completePrelaunch(error, preparedTasks ?? []);
+        throw error;
+      } finally {
+        routingScope?.finish();
       }
-      const result = await work;
-      if (!ownsRouting(runtime, executionGeneration)) fail("Subagent execution belonged to a previous session/branch; its final state remains on the originating branch.");
+      })();
+      // A handoff leaves this lifetime running. Observe late prelaunch rejection;
+      // completePrelaunch retains the error on the same collectable registry id.
+      void pipeline.catch(() => {});
+      let outcome: Awaited<typeof pipeline>;
+      if (!registeredRun || audience === "private") {
+        outcome = await pipeline;
+      } else {
+        const raced = await Promise.race([
+          pipeline,
+          handoff,
+          ...(validated.async ? [startup] : []),
+        ]);
+        // Lock the outcome BEFORE any native usage claim. Never race its commit.
+        outcomeChosen = true;
+        if (typeof raced === "string") {
+          const snapshot = transfer();
+          if (snapshot) {
+            if (raced === "handoff") {
+              returned = true;
+              return {
+                content: [{ type: "text", text: reminderText(snapshot) }],
+                details: details(snapshot.mode, snapshot.results, {
+                  ...snapshot,
+                  presentation: { kind: "receipt", operation: "Elapsed handoff", id: snapshot.id,
+                    receipt: "Reminder threshold reached; the same run continues in background ownership.",
+                    observedAt: Date.now(), durationKind: "live" } satisfies RunPresentation,
+                }),
+              };
+            }
+            try {
+              const { usage: selectorUsage } = await claimRoutingUsage(runtime, { ids: workerReceiptIds });
+              if (!ownsRouting(runtime, requestGeneration)) fail("Background startup belonged to a previous session/branch.");
+              // Keep the selected startup attachment, but refresh its observation after
+              // a delayed usage commit: the run may have settled in the meantime.
+              const found = runtime.registry.lookup(snapshot.id, runtime.key);
+              const observed = found.status === "found" && found.run
+                ? "controller" in found.run ? snapshotFromLiveRun(found.run) : found.run
+                : snapshot;
+              const settled = found.status === "found" && found.run && !("controller" in found.run);
+              return deliveredResult(`Run ${snapshot.id} is ${observed.state}${settled ? "; background work has settled, collect with wait" : " in background ownership"}. Use status/wait/steer/cancel with this full id, or open /subagents. Completion notifications follow the notifications setting. Selector currency is unreported.`,
+                { ...details(observed.mode, observed.results, { ...observed, presentation: {
+                  kind: settled ? "receipt" : "startup", operation: settled ? "Background run settled" : "Started in background",
+                  id: snapshot.id, observedAt: Date.now(), durationKind: settled ? "frozen" : "live",
+                  receipt: settled ? "Background work settled during startup accounting; collect its full result with wait." : undefined,
+                } }), routingReceipts: [...(routingScope?.receipts.values() ?? [])], routingCurrency: "unreported" }, [], selectorUsage);
+            } finally {
+              // A persistence error can end the original tool too; the detached
+              // live run still owns its one reminder and remains collectable.
+              returned = true;
+              if (reminderDue) notifyReminder();
+            }
+          }
+          // Snapshot/abort/ownership change wins over a false still-running receipt.
+          outcome = await pipeline;
+        } else outcome = raced;
+      }
+      if (outcome.kind === "plan") return outcome.value;
+      const result = outcome.result;
+      const runId = registeredRun!.id;
+      if (!ownsRouting(runtime, requestGeneration)) fail("Subagent execution belonged to a previous session/branch; its final state remains on the originating branch.");
       // First delivery wins the native usage attachment: a rare concurrent
       // wait/dismiss that already consumed this run must not double-bill.
-      const selectorUsage = await claimRoutingUsage(runtime, { runId });
-      if (!ownsRouting(runtime, executionGeneration)) fail("Delivery belonged to a previous session/branch.");
-      const firstDelivery = runtime.registry.markDelivered(runId, runtime.key);
+      const routingClaim = await claimRoutingUsage(runtime, { runId });
+      if (!ownsRouting(runtime, requestGeneration)) fail("Delivery belonged to a previous session/branch.");
+      if (!routingClaim.claimRun) fail("Run routing delivery claim is missing.");
+      const { usage: selectorUsage, firstDelivery } = routingClaim.claimRun();
       const delivered = runtime.output.capOutputForDelivery(result.results);
       const text = [synthesisDiagnostic(result.summary), delivered.text || result.summary].filter(Boolean).join("\n\n");
       const finished = runtime.registry.lookup(runId, runtime.key);
@@ -1966,7 +2135,8 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         if (registeredRun && !registeredRun.childStarted) completePrelaunch(error, preparedTasks ?? []);
         throw error;
       } finally {
-        routingScope?.finish();
+        // Registered pipelines retain their scope after early parent-tool returns.
+        if (!registeredRun) routingScope?.finish();
       }
   }
 
@@ -2112,6 +2282,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
         if (!question) return;
       }
 
+      const btwGeneration = runtime.routingGeneration;
       const label = btwLabel(question);
       pi.appendEntry(BTW_ENTRY_TYPE, { state: "running", question, label } satisfies BtwEntry);
       if ((ctx as { mode?: string }).mode !== "tui") ctx.ui.notify(`by the way: ${label} — running in the background`, "info");
@@ -2119,7 +2290,7 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
       try {
         // Reuse the tool's own execute so /btw inherits validation, profiles,
         // budgets, semaphore + process locks, and output capping unchanged.
-        const result = await subagentTool.execute(
+        const result = await executeSubagent(
           `btw-${Date.now()}`,
           {
             task: question,
@@ -2129,12 +2300,16 @@ export default async function registerSubagent(pi: ExtensionAPI): Promise<void> 
           undefined,
           undefined,
           ctx as never,
+          undefined,
+          "private",
         );
+        if (!ownsRouting(runtime, btwGeneration) || runtime.key !== sessionKey(ctx)) return;
         // The tool signals failure by throwing (fail()), so reaching here is success.
         const text = result.content.find((item) => item.type === "text")?.text ?? "(no output)";
         pi.appendEntry(BTW_ENTRY_TYPE, { state: "done", question, label, answer: String(text) } satisfies BtwEntry);
         if ((ctx as { mode?: string }).mode !== "tui") ctx.ui.notify(`by the way: ${label} — answered`, "info");
       } catch (error) {
+        if (!ownsRouting(runtime, btwGeneration) || runtime.key !== sessionKey(ctx)) return;
         const message = error instanceof Error ? error.message : String(error);
         pi.appendEntry(BTW_ENTRY_TYPE, { state: "failed", question, label, answer: message } satisfies BtwEntry);
         if ((ctx as { mode?: string }).mode !== "tui") ctx.ui.notify(`by the way failed: ${message}`, "error");

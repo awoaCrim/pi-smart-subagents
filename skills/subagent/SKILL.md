@@ -43,6 +43,8 @@ and `thinking`; callers cannot select them.
 
 ## Permissions and delivery
 
+- A `tasks[]` batch supports at most 10 workers. Default concurrency is 10 per
+  parent session; explicit configuration and machine-wide limits still apply.
 - `explore` and `review` reject ordinary write-capable tools. `general` permits
   locally allowed tools and may write. These profiles and worktrees are not OS
   sandboxes. `cwd` selects the working directory.
@@ -58,10 +60,15 @@ and `thinking`; callers cannot select them.
   a wait neither cancels nor consumes the run. Completion notifications do not
   consume the once-only full result. Use `cancel` to stop work. A failed setup
   can still have a collectable run ID; do not start duplicate work blindly.
-- `max_turns`, `max_cost` and `timeout_ms` bound work. Timeout includes preflight,
-  routing, setup, queue and execution. Turn/cost stops allow configured grace
-  turns to wrap up. A foreground caller abort cancels its run; `async: true`
-  lets work outlive the initiating call.
+- Task `timeout_ms` is one elapsed reminder/handoff threshold, not a stop limit.
+  It includes preflight, routing, setup, queue, attempts and synthesis; parallel
+  uses the shortest resolved item value. Foreground returns the same full run ID
+  at the threshold; background gets one reminder. Use status/wait/steer/cancel.
+  Saved time settings are now advisory; a reminder renews no paid-call allowance.
+- `max_turns`/`max_cost` keep their wrap-up grace; independent startup/request/stall
+  faults still stop work. Foreground abort cancels before handoff. After handoff
+  or async startup, the old caller signal no longer owns the run; explicit cancel
+  and session shutdown still do. The trusted unranked SDK keeps its hard timeout.
 - Jev selection can incur separate fees. `max_cost` is a soft provider-reported
   execution-cost ceiling, not a cap on selector charges. Routing currency is unreported. A
   selector failure stops new dispatch; management needs no routing credential.

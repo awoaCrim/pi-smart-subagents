@@ -74,7 +74,7 @@ A named agent supplies a persona and non-model defaults; Jev still chooses the e
 
 #### Parallel tasks and synthesis
 
-Parallel tasks default to `explore` and work in compact:
+Parallel tasks default to `explore`. Both modes accept 1–10 tasks per batch, with a default concurrency of 10 per parent session. Explicit lower settings and the machine-wide limit can still constrain execution:
 
 ```json
 {
@@ -113,7 +113,7 @@ Or pass this request to `subagent_wait`, which delegates to the same collection 
 { "id": "<run-id>", "timeout_ms": 30000 }
 ```
 
-An interrupted or timed-out wait does not cancel or consume a still-running task. A real foreground dispatch is registered before local preflight and Jev selection, so a routing/setup timeout or failure remains visible under its run id; use `async: true` when the work must outlive the initiating call. Cancel it explicitly when needed:
+An interrupted or timed-out wait does not cancel or consume a still-running task. A real dispatch is registered before local preflight and Jev selection, so prelaunch failures and selector receipts remain discoverable under the same run ID. `async: true` returns a background receipt after dispatch preparation; a foreground call also transfers to background ownership when its task reminder threshold is reached, including while preparation is still pending. Cancel explicitly when needed:
 
 ```json
 { "action": "cancel", "id": "<run-id>" }
@@ -193,7 +193,13 @@ Both operations select again. **Both modes** can steer an existing running child
 
 #### Budgets and retries
 
-A budget breach requests a final answer and allows the configured grace turns. `timeout_ms` is the absolute task deadline across local preflight, Jev routing, setup, queueing and child execution; status and terminal output distinguish a pre-spawn `timeout (routing)` from child `queued`, `starting`, `running` or `cancelling` timeout. Before any tool starts, a recognized model-availability failure can advance to the next candidate in Jev probability order. All attempts share the selected tools, task deadline and cumulative execution budgets. Switching does not call Jev again.
+Task `timeout_ms` is one elapsed reminder/foreground handoff threshold, **not a maximum execution duration**. The clock starts at invocation and includes configuration/preparation, local preflight, Jev selection, setup, queueing, startup, attempts and optional synthesis. A still-pending foreground call returns the full run ID and its current queued/running evidence at the threshold; the same run continues in background ownership. Use status/wait/steer/cancel rather than launching replacement work merely because it is slow.
+
+Parallel work uses the shortest resolved item threshold on the shared invocation clock, even if that worker has finished while siblings remain. Each run receives at most one reminder: either the awaiting tool receipt or a parent steer message after an async startup receipt, never both. Completion before the threshold suppresses it. A reminder does not retry, reset budgets, renew paid-call authorization or consume output/native usage. The `notifications` setting controls completion messages only; the elapsed reminder is independent.
+
+**Compatibility change:** saved tool, agent, profile and `defaultTimeoutMs` values now have this advisory meaning; names, precedence and numeric defaults are unchanged. Foreground abort cancels before transfer. After handoff or explicit async startup, the old initiating signal no longer cancels the run; explicit cancel and session/tree shutdown still do. `subagent_wait.timeout_ms` remains a caller-wait limit and does not restart the task clock. Private `/btw` keeps awaiting its answer and shows only a human reminder. Plan has no live run or handoff; its actual selector-request limit remains enforceable.
+
+Turn/cost breaches still request a final answer and allow configured grace turns. Independent selector-request, startup-verification and protocol-stall faults still stop work; old terminal timeout snapshots remain readable. The trusted unranked SDK keeps its separate hard `TaskSpec.timeoutMs` contract. Before tools start, a recognized model-availability failure can advance through Jev's ranking within the unchanged attempt limits and cumulative execution budgets. Switching never calls Jev again.
 
 Both modes expose `timeout_ms`, `max_turns` and `max_cost`:
 
@@ -256,7 +262,7 @@ Or open the question prompt:
 /btw
 ```
 
-`/btw` runs a one-off read-only subagent for _you_, not for the model. It uses the same policy, budget, semaphore and process-lock machinery as any run, but delivers its answer as a custom session entry, which does not participate in LLM context. The main agent keeps working and never sees the question or the answer; useful for checking something mid-task without derailing the conversation or polluting the context window.
+`/btw` runs a one-off read-only subagent for _you_, not for the model. It uses the same policy, budget, semaphore and process-lock machinery as any run, but delivers its answer as a custom session entry, which does not participate in LLM context. At its advisory threshold it shows a human-only notice and continues privately awaiting the final answer; no parent reminder/completion is sent, and the notice is not a completed answer. Useful for checking something mid-task without derailing the conversation or polluting the context window.
 
 ---
 
@@ -298,11 +304,11 @@ Defaults can be overridden in `~/.pi/subagent.json`; runtime fields with an env 
 | Setting                 | Env var                               | Default                               |
 | ----------------------- | ------------------------------------- | ------------------------------------- |
 | `toolMode`             | -                                     | `compact` (registration-time; see [tool modes](#tool-modes)) |
-| `maxTasksPerRun`        | `PI_SUBAGENT_MAX_TASKS`               | 8                                     |
-| `maxActiveProcesses`    | `PI_SUBAGENT_MAX_ACTIVE`              | 4                                     |
+| `maxTasksPerRun`        | `PI_SUBAGENT_MAX_TASKS`               | 10                                    |
+| `maxActiveProcesses`    | `PI_SUBAGENT_MAX_ACTIVE`              | 10                                    |
 | `maxQueuedTasks`        | `PI_SUBAGENT_MAX_QUEUED`              | 32                                    |
 | `maxGlobalActive`       | `PI_SUBAGENT_MAX_GLOBAL_ACTIVE`       | 16                                    |
-| `defaultTimeoutMs`      | `PI_SUBAGENT_TIMEOUT_MS`              | 900000                                |
+| `defaultTimeoutMs`      | `PI_SUBAGENT_TIMEOUT_MS`              | 900000 (advisory task threshold)       |
 | `maxDepth`              | `PI_SUBAGENT_MAX_DEPTH`               | 2                                     |
 | `killGraceMs`           | `PI_SUBAGENT_KILL_GRACE_MS`           | 3000                                  |
 | `sessionDir`            | `PI_SUBAGENT_SESSION_DIR`             | `~/.pi/subagent-sessions`             |
@@ -318,8 +324,10 @@ Defaults can be overridden in `~/.pi/subagent.json`; runtime fields with an env 
 | `stallKillAfterMs`      | `PI_SUBAGENT_STALL_KILL_AFTER_MS`     | 90000                                 |
 | `maxRetries`            | `PI_SUBAGENT_MAX_RETRIES`             | 1                                     |
 | `widget`                | `PI_SUBAGENT_WIDGET`                  | `background` (`off` disables)         |
-| `notifications`         | `PI_SUBAGENT_NOTIFICATIONS`           | `batched` (`off` disables)            |
+| `notifications`         | `PI_SUBAGENT_NOTIFICATIONS`           | `batched` (`off` disables completion messages, not elapsed reminders) |
 | (bin)                   | `PI_SUBAGENT_BIN`                     | auto (`process.execPath` + CLI entry) |
+
+Batch and concurrency defaults are shared by root and nested parent sessions; they do not bypass spawn permissions or depth limits. `maxTasksPerRun` can lower the accepted batch size, but the public schemas cap it at 10. `maxActiveProcesses` controls active child slots across that parent's runs, independently of batch size. The unchanged `maxGlobalActive` limit and depth reservations still apply across Pi parents, so a busy machine does not guarantee ten available slots.
 
 #### Jev routing
 
@@ -350,7 +358,7 @@ New subagent dispatches are selected by Jev, TypeSafe's structured-decision API,
 - `selectorModel` defaults to the stable alias `jev-latest`. Pin an exact version to control which selector version is requested. This does not guarantee deterministic choices; the extension records the version that actually answered.
 - `apiKey` is required and has no default. It must be a non-blank string; surrounding whitespace is trimmed and embedded whitespace/control characters are rejected. Store it only in the private config file. The transport uses it only for the Authorization header and does not copy it into prompts, selector JSON bodies, argv, logs, receipts or results. `apiKeyEnv` is rejected with migration guidance; environment variables cannot supply or override the key.
 - `baseUrl` is optional and is the complete SystemOne request URL. When omitted, the exact official default `https://api.typesafe.ai/v1/systemone` is used. The URL is canonicalized by the standard URL parser and never receives an implicit path suffix or replacement. It must be an absolute `https://` URL with a hostname, no username/password, query, fragment, whitespace or control characters, and no more than 2048 characters; invalid values reject new routing before HTTP. A custom destination receives the same minimal task/model routing disclosure, so configure it only when that endpoint is trusted. The normalized URL remains in the private frozen config snapshot, not in routing DTOs, prompts, receipts, persisted results or child arguments.
-- `timeoutMs` defaults to 15000 and must be an integer between 100 and 600000. It bounds one logical task selection, including all its HTTP requests and queue waits. Parallel workers each have a selection allowance, still capped by their absolute task `timeout_ms` deadline. Deferred synthesis has a separate allowance.
+- `timeoutMs` defaults to 15000 and must be an integer between 100 and 600000. It bounds one logical task selection, including all its HTTP requests and queue waits. Parallel workers each have a selection allowance; advisory task `timeout_ms` does not shorten it. Deferred synthesis has a separate allowance.
 - `models` holds 1 to 255 entries, each with an exact `provider/model-id` and a non-blank description. Those descriptions are what Jev matches against your task, so write them the way you would explain the model to a colleague. A candidate may include an optional trusted `thinking` default; it is not a request-body field.
 
 Plan and background-start native usage attachments are limited to 1024 selector HTTP receipts per invocation. Larger requests fail with a request-splitting error; background work has not started at that point. Previously incurred selector tokens remain in the ledger. This bounds an atomic delivery record; local tool activation is resolved separately and is not part of the selector request count.
@@ -377,7 +385,7 @@ Local policy resolves one complete ordinary/native candidate set for every attem
 
 Switching requires a settled provider error and conclusive evidence that no tool execution has begun in this invocation. Recognized cases include an explicitly unavailable model, temporary throttling, service overload and identifiable transport failures. Authentication/configuration errors, quota or billing exhaustion, invalid requests, context limits, refusals, poor answers, schema failures, cancellation and exhausted budgets do not trigger a model switch. Recognition uses only the latest completed assistant error's bounded message and documented primitive `diagnostics.error.code`, never ordinary answer text or arbitrary diagnostic details. Authentication, quota and other excluded evidence take precedence over an availability code. Unfamiliar error formats stop conservatively. A tool-start event blocks restart even when no result arrived; missing or malformed protocol evidence is not permission to retry. Historical tool messages in a resumed or forked session are not new execution.
 
-For an eligible failure, the next allowed extension attempt advances immediately to the next candidate; it does not first add a same-model retry. Conclusively pre-work local process failures can retry the same candidate under the same total attempt budget. Attempts also have a local resource ceiling of 255 launches, including infrastructure retries. Expired task deadlines, uncertainty after startup and stalls cannot be used to restart work that may have begun. Pi's internal retries remain enabled or disabled according to your existing Pi settings, which this extension does not change.
+For an eligible failure, the next allowed extension attempt advances immediately to the next candidate; it does not first add a same-model retry. Conclusively pre-work local process failures can retry the same candidate under the same total attempt budget. Attempts also have a local resource ceiling of 255 launches, including infrastructure retries. An elapsed reminder, uncertainty after startup or a stall cannot be used to restart work that may have begun. Any explicitly supplied hard deadline remains enforceable. Pi's internal retries remain enabled or disabled according to your existing Pi settings, which this extension does not change.
 
 Plan and status distinguish the original selector choice from the actual execution model. Results retain bounded attempt metadata, failure categories, output previews and child-session pointers; previews are attributed to the attempt that produced them. A later successful structured answer is not concatenated with failed JSON. If Pi retries within the same child, an empty latest answer stays empty; it never reuses text or JSON from the failed turn. If all attempts fail, the final failure/model/session remain authoritative. Earlier output remains available while its session is referenced on the active branch. Usage accumulates under the same run, without duplicating selector receipts; existing native-accounting limitations for thrown failures still apply.
 
@@ -426,10 +434,10 @@ Invoke with `{ task: "…", agent: "reviewer" }`. The agent file supplies person
 
 Notes on engine behavior (explicit advanced request fields below require full mode; trusted defaults and historical result management are unaffected):
 
-- `timeout_ms` is the absolute task deadline: local preflight, Jev selection, setup, queue time and runtime all count against it, and selection cannot reset it. Timed-out tasks report `state: "timeout"` with `timeoutPhase: "queued"|"starting"|"running"` so agents can retry capacity issues without confusing them for task failures.
+- Tool `timeout_ms` is the advisory invocation clock described under [budgets and retries](#budgets-and-retries), not a hard stop or terminal `timeout` state. Explicit hard deadlines and historical timeout records keep their phase evidence; selector-request/startup/stall limits remain independent.
 - Budget stops (`max_turns`, `max_cost`) trigger a **graceful wrap-up**: the child is steered to produce its final answer NOW and allowed `graceTurns` more turns before SIGTERM. Results end as `partial` with `wrappedUp: true` when the child concluded in time. `graceTurns: 0` restores immediate stops.
 - A **stall watchdog** flags children with no protocol activity for `stallAfterMs` (a liveness probe distinguishes quiet-but-thinking from dead), then kills after `stallKillAfterMs` more silence. A stall is not proof that no tool ran and does not authorize ranked failover.
-- **Ranked failover** follows the [availability and pre-tool rules](#probability-ranked-failover), bounded by total `maxRetries`, candidate exhaustion, cumulative budgets and the original deadline. A selector failure has no emergency fallback. Task-quality, cancellation and budget failures never trigger model reselection.
+- **Ranked failover** follows the [availability and pre-tool rules](#probability-ranked-failover), bounded by total `maxRetries`, candidate exhaustion, cumulative budgets, cancellation and any explicit hard deadline. A selector failure has no emergency fallback. Task-quality, cancellation and budget failures never trigger model reselection.
 - `context: "fork"` starts a single child from a real branched copy of the parent conversation (`--fork` on the parent's session file). It requires a persisted parent session, cannot combine with `resume`, and is rejected for parallel fanout (context duplication × N is a cost bug, not a feature).
 - **Structured output** (`output_schema`): the contract is appended to the child's system prompt; the final message must end with a fenced `json:result` block. Validation runs parent-side against a dependency-free JSON-Schema subset (type/properties/required/items/enum/const; unknown keywords are ignored, never rejected). An otherwise successful but invalid answer gets **one steer-based repair round**; still-invalid results end `partial` with `structuredError` and raw text retained. Failed provider attempts neither repair nor publish structured output. Validated successful parallel results feed the `synthesis` child as clean JSON instead of prose.
 - **Arg repair**: double-encoded task text (literal `\n` / `\"` escapes from LLM re-encoding) is conservatively de-mangled once at validation time. Identifier fields and paths are never touched. Protocol streams truncated after useful assistant output also end as `partial`.
@@ -480,6 +488,8 @@ const task: TaskSpec = {
   timeoutMs: 10 * 60_000,
 };
 ```
+
+For trusted SDK specs without an extension route, `TaskSpec.timeoutMs` remains a hard child limit, including queue time; an optional absolute `deadline` can further bound setup and attempts. The extension tool's advisory snake_case field does not change that API or add implicit routing/reminders to SDK calls.
 
 Prefer `runTasks()` for multi-task / worktree orchestration (same path the extension and pi-workflows use). `runSubagent()` runs a single child process directly without the extension host, but durable coordination is **opt-in**. Pass both `locks` (a `ProcessLockManager`) and a stable `runId` if you want global concurrency slots and orphan reclaim to see the child. Without those options no durable run record is written, so a parent restart cannot reclassify the process and nested children vanish from reconcile. There is intentionally no implicit default lock manager; embedding code that needs durability must construct and share one.
 

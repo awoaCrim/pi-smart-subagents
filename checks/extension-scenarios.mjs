@@ -18,7 +18,7 @@ export async function extensionFixture({ SRC, PI_ROOT, temp, theme, toolMode = '
   const mocks = {
     'config.js': `import { sanitizeConfigOverrides } from ${JSON.stringify(source('config.ts'))};
       export * from ${JSON.stringify(source('config.ts'))};
-      export const readConfigFile = async () => { const s=globalThis.__subagentHarness; s.configReads++; return sanitizeConfigOverrides(s.config,'offline-fixture'); };`,
+      export const readConfigFile = async () => { const s=globalThis.__subagentHarness; s.configReads++; await s.configHook?.(); return sanitizeConfigOverrides(s.config,'offline-fixture'); };`,
     'agents.js': `export { describeCatalog } from ${JSON.stringify(source('agents.ts'))};
       export const discoverAgents=()=>{ const s=globalThis.__subagentHarness; s.catalogReads++; return new Map(s.agents.map(a=>[a.name,a])); };`,
     'launch.js': `export const createGetPiCommand=()=>()=>{throw Error('No process launches in harness')}; export const getLaunchResolution=()=>({});`,
@@ -35,15 +35,18 @@ export async function extensionFixture({ SRC, PI_ROOT, temp, theme, toolMode = '
       forceRemove=async()=>{};
     }`,
     'distill.js': `export const sweepSessionsLifecycle=async()=>{};`,
-    'dispatch-preflight.js': `export const runLocalPreflights=async()=>{globalThis.__subagentHarness.preflights++};`,
-    'jev-router.js': `export class JevRouter { constructor({config}){globalThis.__subagentHarness.routingConfigs.push(config)} }`,
+    'dispatch-preflight.js': `export const runLocalPreflights=async(tasks,cwd,deps)=>{
+      const s=globalThis.__subagentHarness; s.preflights++; await s.preflightHook?.(tasks,cwd,deps); deps.assertOwner(); };`,
+    'jev-router.js': `export class JevRouter { constructor({config,onReceipt}){this.onReceipt=onReceipt; globalThis.__subagentHarness.routingConfigs.push(config)} }`,
     'dispatch-routing.js': `import { finalizeRoutedTasks } from ${JSON.stringify(source('policy.ts'))};
-      export const routePreparedTasks=async(tasks,catalog)=>{ globalThis.__subagentHarness.routes++;
+      export const routePreparedTasks=async(tasks,catalog,router,options)=>{ const s=globalThis.__subagentHarness; s.routes++;
+        await s.routeHook?.(tasks,catalog,router,options); options.assertOwner();
         const resolved=finalizeRoutedTasks(tasks,tasks.map(()=>({selectedModel:catalog.models[0].model,confidence:1,
           rankedModels:catalog.models.map((m,i)=>({model:m.model,probability:i===0?1:0}))})),catalog.models);
         if(!resolved.ok) throw Error(resolved.error); return resolved.tasks; };`,
     'orchestrator.js': `export const runTasks=(specs, options)=>new Promise((resolve,reject)=>{
-      const s=globalThis.__subagentHarness; s.children++; s.pending.push({specs,options,resolve,reject});
+      const s=globalThis.__subagentHarness; s.children++; const pending={specs,options,resolve,reject}; s.pending.push(pending);
+      s.childHook?.(pending);
     });`,
   };
   const outfile = path.join(temp, `extension-integration-${toolMode}-${stateId++}.mjs`);
@@ -93,7 +96,7 @@ export async function extensionFixture({ SRC, PI_ROOT, temp, theme, toolMode = '
     registerCommand: (name, command) => commands.set(name, command),
     registerMessageRenderer: (name, renderer) => renderers.set(name, renderer),
     registerEntryRenderer: (name, renderer) => entryRenderers.set(name, renderer),
-    appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }),
+    appendEntry: (customType, data) => { state.appendHook?.(customType,data); entries.push({ type: 'custom', customType, data }); },
     sendMessage: (message, options) => messages.push({ message, options }),
     getAllTools: () => { state.toolCatalogReads++; return state.tools ?? []; },
     getActiveTools: () => { state.activeToolReads++; return (state.tools ?? []).map(t=>t.name); }, getThinkingLevel: () => 'off',
